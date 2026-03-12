@@ -129,10 +129,16 @@ fn parse_json(src: &str) -> Option<Value> {
             let byte = chunk[chunk_offset];
             state = match state {
                 State::ValueWhitespace => {
-                    if (byte_state.whitespace >> chunk_offset) & 1 != 0 {
-                        chunk_offset += 1;
-                        continue 'inner;
+                    // Compute the distance to the first non-whitespace byte in
+                    // the remaining chunk using a single trailing-zeros count,
+                    // skipping the whole run in one operation.
+                    let ahead = (!byte_state.whitespace) >> chunk_offset;
+                    let skip = ahead.trailing_zeros() as usize; // 64 when all whitespace
+                    chunk_offset += skip;
+                    if chunk_offset >= chunk_len {
+                        break 'inner;
                     }
+                    let byte = chunk[chunk_offset];
                     match byte {
                         b'{' => { frames.push(Frame::Obj { key: String::new(), members: Vec::new() }); State::ObjectStart }
                         b'[' => { frames.push(Frame::Arr { elements: Vec::new() }); State::ArrayStart }
