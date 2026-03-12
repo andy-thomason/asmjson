@@ -1,27 +1,28 @@
 
-
-//! This module parses JSON strings 64 bytes at a time using AVX-512BW instructions to quickly identify structural characters.
+//! This module parses JSON strings 64 bytes at a time using AVX-512BW
+//! instructions to quickly identify structural characters, enabling entire
+//! whitespace runs and string bodies to be skipped in a single operation.
 //!
-//! Here is some example JSON with corresponding states:
-//! ```json
-//!  { "key1" : "value1" , "key2": [123, 456 , 768], "key3" : { "nested_key" : true} }
-//! vvkkkkkkkkkvsssssssss,kkkkkkkkvvvnnavvnn-avvnnaakkkkkkkkkvvvkkkkkkkkkkkkkkvvnnnooo
-//!  ( (cccc)-: (cccccc)-,-(cccc): ((c), (c)-, (c)), (cccc)-: ( (cccccccccc)-: (cc))-)
+//! Each byte of the input is labelled below with the state that handles it.
+//! States that skip whitespace via `trailing_zeros` handle both the whitespace
+//! bytes **and** the following dispatch byte in the same loop iteration.
+//!
+//! ```text
+//! { "key1" : "value1" , "key2": [123, 456 , 768], "key3" : { "nested_key" : true} }
+//! VOOKKKKKDDCCSSSSSSSFFOOKKKKKDCCRAAARRAAAFRRAAAFOOKKKKKDDCCOOKKKKKKKKKKKDDCCAAAAFF
 //! ```
-//! 
-//! v = JSON value start {, [, ", digit, t, f, n}
-//! k = JSON key
-//! s = String
-//! a = Array
-//! o = Object
-//! n = number, bool or null.
 //!
-//! space = leading whitespace
-//! s = start of a token
-//! c = trailing chars of the start.
-//! e = end of a token
-//! t = trailing whitespace
-//! 
+//! State key:
+//! * `V` = `ValueWhitespace` — waiting for the first byte of any value
+//! * `O` = `ObjectStart`     — after `{` or `,` in an object; skips whitespace, expects `"` or `}`
+//! * `K` = `KeyChars`        — inside a quoted key; bulk-skipped via the backslash/quote masks
+//! * `D` = `KeyEnd`          — after closing `"` of a key; skips whitespace, expects `:`
+//! * `C` = `AfterColon`      — after `:`; skips whitespace, dispatches to the value type
+//! * `S` = `StringChars`     — inside a quoted string value; bulk-skipped via the backslash/quote masks
+//! * `F` = `AfterValue`      — after any complete value; skips whitespace, expects `,`/`}`/`]`
+//! * `R` = `ArrayStart`      — after `[` or `,` in an array; skips whitespace, dispatches value
+//! * `A` = `AtomChars`       — inside a number, `true`, `false`, or `null`
+
 
 #[derive(PartialEq)]
 enum State {
