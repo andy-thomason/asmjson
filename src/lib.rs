@@ -374,40 +374,39 @@ fn next_state(src: &[u8], constants: &ByteStateConstants) -> ByteState {
             // Masked byte load: only load src.len() bytes, zero the rest.
             "kmovq k1, {load_mask}",
             "vmovdqu8 zmm0 {{k1}}{{z}}, zmmword ptr [{src}]",
-            // Whitespace: any byte <= 0x20 (space).
-            "vpcmpub k1, zmm0, zmmword ptr [{n_space}], 2",
-            "kmovq {whitespace}, k1",
-            // Double-quote positions.
-            "vpcmpeqb k1, zmm0, zmmword ptr [{n_quote}]",
-            "kmovq {quotes}, k1",
-            // Backslash positions.
-            "vpcmpeqb k1, zmm0, zmmword ptr [{n_backslash}]",
-            "kmovq {backslashes}, k1",
-            // Atom delimiters: comma | } | ] accumulated in GP registers.
-            "vpcmpeqb k1, zmm0, zmmword ptr [{n_comma}]",
-            "kmovq {delimiters}, k1",
-            "vpcmpeqb k1, zmm0, zmmword ptr [{n_close_brace}]",
-            "kmovq {tmp}, k1",
-            "or {delimiters}, {tmp}",
-            "vpcmpeqb k1, zmm0, zmmword ptr [{n_close_bracket}]",
-            "kmovq {tmp}, k1",
-            "or {delimiters}, {tmp}",
-            "or {delimiters}, {whitespace}",
-            src            = in(reg)  src.as_ptr(),
-            n_space        = in(reg)  constants.space.as_ptr(),
-            n_quote        = in(reg)  constants.quote.as_ptr(),
-            n_backslash    = in(reg)  constants.backslash.as_ptr(),
-            n_comma        = in(reg)  constants.comma.as_ptr(),
-            n_close_brace  = in(reg)  constants.close_brace.as_ptr(),
-            n_close_bracket= in(reg)  constants.close_bracket.as_ptr(),
-            load_mask      = in(reg)  load_mask,
-            whitespace     = out(reg) whitespace,
-            quotes         = out(reg) quotes,
-            backslashes    = out(reg) backslashes,
-            delimiters     = out(reg) delimiters,
-            tmp            = out(reg) _,
+            // Issue all six comparisons into distinct k registers so the CPU
+            // can execute them in parallel, then move the results to GP
+            // registers as a batch at the end.
+            "vpcmpub  k2, zmm0, zmmword ptr [{n_space}],         2", // whitespace (<= 0x20)
+            "vpcmpeqb k3, zmm0, zmmword ptr [{n_quote}]",            // quotes
+            "vpcmpeqb k4, zmm0, zmmword ptr [{n_backslash}]",        // backslashes
+            "vpcmpeqb k5, zmm0, zmmword ptr [{n_comma}]",            // comma
+            "vpcmpeqb k6, zmm0, zmmword ptr [{n_close_brace}]",      // '}'
+            "vpcmpeqb k7, zmm0, zmmword ptr [{n_close_bracket}]",    // ']'
+            // Combine delimiter masks in k-registers (no GP round-trip needed).
+            "korq k5, k5, k6",   // comma | '}'
+            "korq k5, k5, k7",   // | ']'
+            "korq k5, k5, k2",   // | whitespace
+            // Move all results to GP registers.
+            "kmovq {whitespace},  k2",
+            "kmovq {quotes},      k3",
+            "kmovq {backslashes}, k4",
+            "kmovq {delimiters},  k5",
+            src             = in(reg)  src.as_ptr(),
+            n_space         = in(reg)  constants.space.as_ptr(),
+            n_quote         = in(reg)  constants.quote.as_ptr(),
+            n_backslash     = in(reg)  constants.backslash.as_ptr(),
+            n_comma         = in(reg)  constants.comma.as_ptr(),
+            n_close_brace   = in(reg)  constants.close_brace.as_ptr(),
+            n_close_bracket = in(reg)  constants.close_bracket.as_ptr(),
+            load_mask       = in(reg)  load_mask,
+            whitespace      = out(reg) whitespace,
+            quotes          = out(reg) quotes,
+            backslashes     = out(reg) backslashes,
+            delimiters      = out(reg) delimiters,
             out("zmm0") _,
-            out("k1")   _,
+            out("k1") _, out("k2") _, out("k3") _,
+            out("k4") _, out("k5") _, out("k6") _, out("k7") _,
             options(nostack, readonly),
         );
     }
