@@ -65,7 +65,8 @@ enum Value {
     Array(Vec<Value>)
 }
 
-fn parse_json(mut get_byte: impl FnMut() -> Option<u8>) -> Option<Value> {
+fn parse_json(src: &str) -> Option<Value> {
+    let mut bytes = src.bytes();
     // Partially-built Object or Array sitting on the frame stack.
     enum Frame {
         Obj { key: String, members: Vec<(String, Value)> },
@@ -116,7 +117,7 @@ fn parse_json(mut get_byte: impl FnMut() -> Option<u8>) -> Option<Value> {
     let mut state = State::ValueWhitespace;
     let mut result: Option<Value> = None;
 
-    while let Some(byte) = get_byte() {
+    while let Some(byte) = bytes.next() {
         state = match state {
             State::ValueWhitespace => match byte {
                 b if b <= b' ' => State::ValueWhitespace,
@@ -321,17 +322,7 @@ mod tests {
     use super::*;
 
     fn run(json: &'static str) -> Option<Value> {
-        let bytes = json.as_bytes();
-        let mut idx = 0usize;
-        parse_json(|| {
-            if idx < bytes.len() {
-                let b = bytes[idx];
-                idx += 1;
-                Some(b)
-            } else {
-                None
-            }
-        })
+        parse_json(json)
     }
 
     fn s(v: &str) -> Value { Value::String(v.to_string()) }
