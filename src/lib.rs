@@ -66,7 +66,8 @@ enum Value {
 }
 
 fn parse_json(src: &str) -> Option<Value> {
-    let mut bytes = src.bytes();
+    let parser = JsonParser::new();
+    let bytes = src.as_bytes();
     // Partially-built Object or Array sitting on the frame stack.
     enum Frame {
         Obj { key: String, members: Vec<(String, Value)> },
@@ -117,15 +118,28 @@ fn parse_json(src: &str) -> Option<Value> {
     let mut state = State::ValueWhitespace;
     let mut result: Option<Value> = None;
 
-    while let Some(byte) = bytes.next() {
-        state = match state {
-            State::ValueWhitespace => match byte {
-                b if b <= b' ' => State::ValueWhitespace,
-                b'{' => { frames.push(Frame::Obj { key: String::new(), members: Vec::new() }); State::ObjectStart }
-                b'[' => { frames.push(Frame::Arr { elements: Vec::new() }); State::ArrayStart }
-                b'"' => { buf.clear(); State::StringChars }
-                _    => { buf.clear(); buf.push(byte as char); State::AtomChars }
-            },
+    let mut pos = 0;
+    'outer: while pos < bytes.len() {
+        let chunk_len = (bytes.len() - pos).min(64);
+        let chunk = &bytes[pos..pos + chunk_len];
+        let byte_state = next_state(chunk, &parser);
+
+        let mut chunk_offset = 0;
+        'inner: while chunk_offset < chunk_len {
+            let byte = chunk[chunk_offset];
+            state = match state {
+                State::ValueWhitespace => {
+                    if (byte_state.whitespace >> chunk_offset) & 1 != 0 {
+                        chunk_offset += 1;
+                        continue 'inner;
+                    }
+                    match byte {
+                        b'{' => { frames.push(Frame::Obj { key: String::new(), members: Vec::new() }); State::ObjectStart }
+                        b'[' => { frames.push(Frame::Arr { elements: Vec::new() }); State::ArrayStart }
+                        b'"' => { buf.clear(); State::StringChars }
+                        _    => { buf.clear(); buf.push(byte as char); State::AtomChars }
+                    }
+                },
 
             State::StringChars => match byte {
                 b'\\' => { buf.push('\\'); State::StringEscape }                b'"'  => {
@@ -216,7 +230,10 @@ fn parse_json(src: &str) -> Option<Value> {
                 }
                 _ => State::AfterValue,
             },
-        };
+            };
+            chunk_offset += 1;
+        }
+        pos += chunk_len;
     }
 
     // Flush a trailing atom not followed by a delimiter (e.g. top-level `42`).
@@ -228,94 +245,50 @@ fn parse_json(src: &str) -> Option<Value> {
 }
 
 
+/// Per-chunk classification masks produced by `next_state`.
+struct ByteState {
+    whitespace: u64, // bit n set => byte n is whitespace (<= 0x20)
+}
 
-// /// Input: a complete JSON string.
-// fn partition_json(src: &str) {
-// }
+/// Pre-built 64-byte needle vectors for AVX-512 comparisons.
+struct JsonParser {
+    space: [u8; 64],
+}
 
-// struct ByteState {
-//     braces: u64,
-//     brackets: u64,
-//     quotes: u64,
-//     backslashes: u64,
-//     whitespace: u64,
-// }
+impl JsonParser {
+    fn new() -> Self {
+        Self { space: [b' '; 64] }
+    }
+}
 
-// struct JsonParser {
-//     brace: [u8; 64],
-//     bracket: [u8; 64],
-//     quote: [u8; 64],
-//     backslash: [u8; 64],
-//     space: [u8; 64],
-// }
+/// Classify up to 64 bytes from `src` using AVX-512BW.
+/// Bytes beyond `src.len()` are zeroed via masked load; their whitespace bits
+/// are set to 1 (0 <= 0x20) but are never visited by the inner loop.
+fn next_state(src: &[u8], parser: &JsonParser) -> ByteState {
+    assert!(!src.is_empty() && src.len() <= 64);
+    // Bits 0..len-1 set, rest clear.
+    let load_mask: u64 = if src.len() == 64 { !0u64 } else { (1u64 << src.len()) - 1 };
+    let whitespace: u64;
+    unsafe {
+        std::arch::asm!(
+            // Masked byte load: only load src.len() bytes, zero the rest.
+            "kmovq k1, {load_mask}",
+            "vmovdqu8 zmm0 {{k1}}{{z}}, zmmword ptr [{src}]",
+            // Whitespace: any byte <= 0x20 (space).
+            "vpcmpub k1, zmm0, zmmword ptr [{n_space}], 2",
+            "kmovq {whitespace}, k1",
+            src        = in(reg)  src.as_ptr(),
+            n_space    = in(reg)  parser.space.as_ptr(),
+            load_mask  = in(reg)  load_mask,
+            whitespace = out(reg) whitespace,
+            out("zmm0") _,
+            out("k1")   _,
+            options(nostack, readonly),
+        );
+    }
+    ByteState { whitespace }
+}
 
-// impl JsonParser {
-//     fn new() -> Self {
-//         Self {
-//             brace:     [b'{'; 64],
-//             bracket:   [b'['; 64],
-//             quote:     [b'"'; 64],
-//             backslash: [b'\\'; 64],
-//             space:     [b' '; 64],
-//         }
-//     }
-// }
-
-// fn next_state(src: &[u8], parser: &JsonParser) -> ByteState {
-//     assert!(src.len() >= 64, "src must be at least 64 bytes");
-
-//     let braces: u64;
-//     let brackets: u64;
-//     let quotes: u64;
-//     let backslashes: u64;
-//     let whitespace: u64;
-
-//     // Inline AVX-512BW: load 64 bytes, compare against pre-built 64-byte
-//     // needle vectors loaded directly from `needles`, collect 64-bit masks.
-//     unsafe {
-//         std::arch::asm!(
-//             // Load 64 source bytes.
-//             "vmovdqu64 zmm0, [{src}]",
-
-//             // '{' needle -> braces mask.
-//             "vpcmpeqb k1, zmm0, zmmword ptr [{n_brace}]",
-//             "kmovq {braces}, k1",
-
-//             // '[' needle -> brackets mask.
-//             "vpcmpeqb k1, zmm0, zmmword ptr [{n_bracket}]",
-//             "kmovq {brackets}, k1",
-
-//             // '"' needle -> quotes mask.
-//             "vpcmpeqb k1, zmm0, zmmword ptr [{n_quote}]",
-//             "kmovq {quotes}, k1",
-
-//             // '\\' needle -> backslashes mask.
-//             "vpcmpeqb k1, zmm0, zmmword ptr [{n_backslash}]",
-//             "kmovq {backslashes}, k1",
-
-//             // Whitespace: any byte <= 0x20 (space).
-//             "vpcmpub k1, zmm0, zmmword ptr [{n_space}], 2",
-//             "kmovq {whitespace}, k1",
-
-//             src          = in(reg)  src.as_ptr(),
-//             n_brace      = in(reg)  parser.brace.as_ptr(),
-//             n_bracket    = in(reg)  parser.bracket.as_ptr(),
-//             n_quote      = in(reg)  parser.quote.as_ptr(),
-//             n_backslash  = in(reg)  parser.backslash.as_ptr(),
-//             n_space      = in(reg)  parser.space.as_ptr(),
-//             braces       = out(reg) braces,
-//             brackets     = out(reg) brackets,
-//             quotes       = out(reg) quotes,
-//             backslashes  = out(reg) backslashes,
-//             whitespace   = out(reg) whitespace,
-//             out("zmm0") _,
-//             out("k1")   _,
-//             options(nostack, readonly),
-//         );
-//     }
-
-//     ByteState { braces, brackets, quotes, backslashes, whitespace }
-// }
 
 #[cfg(test)]
 mod tests {
