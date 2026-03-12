@@ -72,7 +72,7 @@ enum State {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-enum Value<'a> {
+pub enum Value<'a> {
     String(&'a str),
     Number(f64),
     Bool(bool),
@@ -81,8 +81,8 @@ enum Value<'a> {
     Array(Vec<Value<'a>>)
 }
 
-fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
-    let parser = JsonParser::new();
+pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
+    let parser = ByteStateConstants::new();
     let bytes = src.as_bytes();
     // Partially-built Object or Array sitting on the frame stack.
     enum Frame<'a> {
@@ -134,7 +134,7 @@ fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
     let mut result: Option<Value> = None;
 
     let mut pos = 0;
-    'outer: while pos < bytes.len() {
+    while pos < bytes.len() {
         let chunk_len = (bytes.len() - pos).min(64);
         let chunk = &bytes[pos..pos + chunk_len];
         let byte_state = next_state(chunk, &parser);
@@ -331,13 +331,13 @@ struct ByteState {
 }
 
 /// Pre-built 64-byte needle vectors for AVX-512 comparisons.
-struct JsonParser {
+struct ByteStateConstants {
     space:     [u8; 64],
     quote:     [u8; 64],
     backslash: [u8; 64],
 }
 
-impl JsonParser {
+impl ByteStateConstants {
     fn new() -> Self {
         Self {
             space:     [b' ';  64],
@@ -350,7 +350,7 @@ impl JsonParser {
 /// Classify up to 64 bytes from `src` using AVX-512BW.
 /// Bytes beyond `src.len()` are zeroed via masked load; their whitespace bits
 /// are set to 1 (0 <= 0x20) but are never visited by the inner loop.
-fn next_state(src: &[u8], parser: &JsonParser) -> ByteState {
+fn next_state(src: &[u8], constants: &ByteStateConstants) -> ByteState {
     assert!(!src.is_empty() && src.len() <= 64);
     // Bits 0..len-1 set, rest clear.
     let load_mask: u64 = if src.len() == 64 { !0u64 } else { (1u64 << src.len()) - 1 };
@@ -372,9 +372,9 @@ fn next_state(src: &[u8], parser: &JsonParser) -> ByteState {
             "vpcmpeqb k1, zmm0, zmmword ptr [{n_backslash}]",
             "kmovq {backslashes}, k1",
             src         = in(reg)  src.as_ptr(),
-            n_space     = in(reg)  parser.space.as_ptr(),
-            n_quote     = in(reg)  parser.quote.as_ptr(),
-            n_backslash = in(reg)  parser.backslash.as_ptr(),
+            n_space     = in(reg)  constants.space.as_ptr(),
+            n_quote     = in(reg)  constants.quote.as_ptr(),
+            n_backslash = in(reg)  constants.backslash.as_ptr(),
             load_mask   = in(reg)  load_mask,
             whitespace  = out(reg) whitespace,
             quotes      = out(reg) quotes,
