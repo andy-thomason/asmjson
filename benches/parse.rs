@@ -1,5 +1,42 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use asmjson::parse_json;
+#[cfg(feature = "stats")]
+use asmjson::stats;
+
+// ---------------------------------------------------------------------------
+// Stats helper — compiled in only with --features stats
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "stats")]
+fn print_stats(label: &str, data: &str) {
+    stats::reset();
+    let _ = parse_json(data);
+    let s = stats::get();
+    let total = s.value_whitespace + s.string_chars + s.string_escape
+              + s.key_chars + s.key_escape + s.key_end + s.after_colon
+              + s.atom_chars + s.object_start + s.array_start + s.after_value;
+    eprintln!("\n=== State entries: {label} ({} bytes, {total} total dispatches) ===",
+              data.len());
+    let mut rows = vec![
+        ("ValueWhitespace", s.value_whitespace),
+        ("StringChars",     s.string_chars),
+        ("StringEscape",    s.string_escape),
+        ("KeyChars",        s.key_chars),
+        ("KeyEscape",       s.key_escape),
+        ("KeyEnd",          s.key_end),
+        ("AfterColon",      s.after_colon),
+        ("AtomChars",       s.atom_chars),
+        ("ObjectStart",     s.object_start),
+        ("ArrayStart",      s.array_start),
+        ("AfterValue",      s.after_value),
+    ];
+    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    for (name, count) in rows {
+        if count > 0 {
+            eprintln!("  {name:<20} {count:>12}  ({:.1}%)", count as f64 / total as f64 * 100.0);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Data generators
@@ -95,6 +132,7 @@ const TARGET: usize = 10 * 1024 * 1024; // 10 MiB
 
 fn bench_string_array(c: &mut Criterion) {
     let data = gen_string_array(TARGET);
+    #[cfg(feature = "stats")] print_stats("string_array", &data);
     let mut group = c.benchmark_group("string_array");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("parse", |b| {
@@ -108,6 +146,7 @@ fn bench_string_array(c: &mut Criterion) {
 
 fn bench_string_object(c: &mut Criterion) {
     let data = gen_string_object(TARGET);
+    #[cfg(feature = "stats")] print_stats("string_object", &data);
     let mut group = c.benchmark_group("string_object");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("parse", |b| {
@@ -121,6 +160,7 @@ fn bench_string_object(c: &mut Criterion) {
 
 fn bench_mixed(c: &mut Criterion) {
     let data = gen_mixed(TARGET);
+    #[cfg(feature = "stats")] print_stats("mixed", &data);
     let mut group = c.benchmark_group("mixed");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("parse", |b| {

@@ -39,6 +39,75 @@
 //!   closing `"` are all handled by `KeyChars` in one bulk-skip pass.
 
 
+// ---------------------------------------------------------------------------
+// Optional state-entry statistics (compiled in with --features stats).
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "stats")]
+pub mod stats {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    pub static VALUE_WHITESPACE: AtomicU64 = AtomicU64::new(0);
+    pub static STRING_CHARS:     AtomicU64 = AtomicU64::new(0);
+    pub static STRING_ESCAPE:    AtomicU64 = AtomicU64::new(0);
+    pub static KEY_CHARS:        AtomicU64 = AtomicU64::new(0);
+    pub static KEY_ESCAPE:       AtomicU64 = AtomicU64::new(0);
+    pub static KEY_END:          AtomicU64 = AtomicU64::new(0);
+    pub static AFTER_COLON:      AtomicU64 = AtomicU64::new(0);
+    pub static ATOM_CHARS:       AtomicU64 = AtomicU64::new(0);
+    pub static OBJECT_START:     AtomicU64 = AtomicU64::new(0);
+    pub static ARRAY_START:      AtomicU64 = AtomicU64::new(0);
+    pub static AFTER_VALUE:      AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for s in all() { s.store(0, Relaxed); }
+    }
+
+    fn all() -> [&'static AtomicU64; 11] {[
+        &VALUE_WHITESPACE, &STRING_CHARS, &STRING_ESCAPE,
+        &KEY_CHARS, &KEY_ESCAPE, &KEY_END, &AFTER_COLON,
+        &ATOM_CHARS, &OBJECT_START, &ARRAY_START, &AFTER_VALUE,
+    ]}
+
+    pub struct StateStats {
+        pub value_whitespace: u64,
+        pub string_chars:     u64,
+        pub string_escape:    u64,
+        pub key_chars:        u64,
+        pub key_escape:       u64,
+        pub key_end:          u64,
+        pub after_colon:      u64,
+        pub atom_chars:       u64,
+        pub object_start:     u64,
+        pub array_start:      u64,
+        pub after_value:      u64,
+    }
+
+    pub fn get() -> StateStats {
+        StateStats {
+            value_whitespace: VALUE_WHITESPACE.load(Relaxed),
+            string_chars:     STRING_CHARS    .load(Relaxed),
+            string_escape:    STRING_ESCAPE   .load(Relaxed),
+            key_chars:        KEY_CHARS       .load(Relaxed),
+            key_escape:       KEY_ESCAPE      .load(Relaxed),
+            key_end:          KEY_END         .load(Relaxed),
+            after_colon:      AFTER_COLON     .load(Relaxed),
+            atom_chars:       ATOM_CHARS      .load(Relaxed),
+            object_start:     OBJECT_START    .load(Relaxed),
+            array_start:      ARRAY_START     .load(Relaxed),
+            after_value:      AFTER_VALUE     .load(Relaxed),
+        }
+    }
+}
+
+/// Increment a state counter when the `stats` feature is enabled; a no-op otherwise.
+macro_rules! stat {
+    ($counter:path) => {
+        #[cfg(feature = "stats")]
+        $counter.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed);
+    };
+}
+
 #[derive(PartialEq)]
 enum State {
     // Waiting for the first byte of any JSON value.
@@ -144,6 +213,7 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
             let byte = chunk[chunk_offset];
             state = match state {
                 State::ValueWhitespace => {
+                    stat!(crate::stats::VALUE_WHITESPACE);
                     // Compute the distance to the first non-whitespace byte in
                     // the remaining chunk using a single trailing-zeros count,
                     // skipping the whole run in one operation.
@@ -163,6 +233,7 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
                 },
 
             State::StringChars => {
+                stat!(crate::stats::STRING_CHARS);
                 // Quotes preceded by a backslash are escaped and do not end
                 // the string.  Mask them out; then find the first interesting
                 // byte (unescaped quote or backslash) with trailing_zeros.
@@ -186,9 +257,10 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
                     _ => State::StringChars,
                 }
             },
-            State::StringEscape => State::StringChars,
+            State::StringEscape => { stat!(crate::stats::STRING_ESCAPE); State::StringChars },
 
             State::KeyChars => {
+                stat!(crate::stats::KEY_CHARS);
                 let unescaped_quotes = byte_state.quotes & !(byte_state.backslashes << 1);
                 let interesting = (byte_state.backslashes | unescaped_quotes) >> chunk_offset;
                 let skip = interesting.trailing_zeros() as usize;
@@ -203,8 +275,9 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
                     _ => State::KeyChars,
                 }
             },
-            State::KeyEscape => State::KeyChars,
+            State::KeyEscape => { stat!(crate::stats::KEY_ESCAPE); State::KeyChars },
             State::KeyEnd => {
+                stat!(crate::stats::KEY_END);
                 let ahead = (!byte_state.whitespace) >> chunk_offset;
                 let skip = ahead.trailing_zeros() as usize;
                 chunk_offset += skip;
@@ -221,6 +294,7 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
                 }
             },
             State::AfterColon => {
+                stat!(crate::stats::AFTER_COLON);
                 let ahead = (!byte_state.whitespace) >> chunk_offset;
                 let skip = ahead.trailing_zeros() as usize;
                 chunk_offset += skip;
@@ -235,6 +309,7 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
             },
 
             State::AtomChars => {
+                stat!(crate::stats::ATOM_CHARS);
                 // Skip non-delimiter bytes in bulk: delimiters has bits set at
                 // whitespace, ',', '}' and ']'.
                 let ahead = byte_state.delimiters >> chunk_offset;
@@ -256,6 +331,7 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
             },
 
             State::ObjectStart => {
+                stat!(crate::stats::OBJECT_START);
                 let ahead = (!byte_state.whitespace) >> chunk_offset;
                 let skip = ahead.trailing_zeros() as usize;
                 chunk_offset += skip;
@@ -272,6 +348,7 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
             },
 
             State::ArrayStart => {
+                stat!(crate::stats::ARRAY_START);
                 let ahead = (!byte_state.whitespace) >> chunk_offset;
                 let skip = ahead.trailing_zeros() as usize;
                 chunk_offset += skip;
@@ -290,6 +367,7 @@ pub fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
             },
 
             State::AfterValue => {
+                stat!(crate::stats::AFTER_VALUE);
                 let ahead = (!byte_state.whitespace) >> chunk_offset;
                 let skip = ahead.trailing_zeros() as usize;
                 chunk_offset += skip;
