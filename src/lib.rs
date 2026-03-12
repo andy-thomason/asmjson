@@ -147,18 +147,54 @@ fn parse_json(src: &str) -> Option<Value> {
                     }
                 },
 
-            State::StringChars => match byte {
-                b'\\' => { buf.push('\\'); State::StringEscape }                b'"'  => {
-                    push_value(Value::String(std::mem::take(&mut buf)), &mut frames, &mut result);
-                    State::AfterValue
+            State::StringChars => {
+                // Quotes preceded by a backslash are escaped and do not end
+                // the string.  Mask them out; then find the first interesting
+                // byte (unescaped quote or backslash) with trailing_zeros.
+                // Note: a backslash at chunk byte 63 that escapes a quote at
+                // byte 0 of the next chunk is handled correctly by the
+                // per-byte fallback on that next chunk.
+                let unescaped_quotes = byte_state.quotes & !(byte_state.backslashes << 1);
+                let interesting = (byte_state.backslashes | unescaped_quotes) >> chunk_offset;
+                let skip = interesting.trailing_zeros() as usize;
+                let end = (chunk_offset + skip).min(chunk_len);
+                for &b in &chunk[chunk_offset..end] {
+                    buf.push(b as char);
                 }
-                _ => { buf.push(byte as char); State::StringChars }
+                chunk_offset = end;
+                if chunk_offset >= chunk_len {
+                    break 'inner;
+                }
+                let byte = chunk[chunk_offset];
+                match byte {
+                    b'\\' => { buf.push('\\'); State::StringEscape }
+                    b'"'  => {
+                        push_value(Value::String(std::mem::take(&mut buf)), &mut frames, &mut result);
+                        State::AfterValue
+                    }
+                    _ => { buf.push(byte as char); State::StringChars }
+                }
             },
             State::StringEscape => { buf.push(byte as char); State::StringChars }
 
-            State::KeyChars => match byte {
-                b'\\' => { buf.push('\\'); State::KeyEscape }                b'"'  => State::KeyEnd,
-                _ => { buf.push(byte as char); State::KeyChars }
+            State::KeyChars => {
+                let unescaped_quotes = byte_state.quotes & !(byte_state.backslashes << 1);
+                let interesting = (byte_state.backslashes | unescaped_quotes) >> chunk_offset;
+                let skip = interesting.trailing_zeros() as usize;
+                let end = (chunk_offset + skip).min(chunk_len);
+                for &b in &chunk[chunk_offset..end] {
+                    buf.push(b as char);
+                }
+                chunk_offset = end;
+                if chunk_offset >= chunk_len {
+                    break 'inner;
+                }
+                let byte = chunk[chunk_offset];
+                match byte {
+                    b'\\' => { buf.push('\\'); State::KeyEscape }
+                    b'"'  => State::KeyEnd,
+                    _ => { buf.push(byte as char); State::KeyChars }
+                }
             },
             State::KeyEscape => { buf.push(byte as char); State::KeyChars }
             State::KeyEnd => match byte {
@@ -253,17 +289,25 @@ fn parse_json(src: &str) -> Option<Value> {
 
 /// Per-chunk classification masks produced by `next_state`.
 struct ByteState {
-    whitespace: u64, // bit n set => byte n is whitespace (<= 0x20)
+    whitespace:  u64, // bit n set => byte n is whitespace (<= 0x20)
+    quotes:      u64, // bit n set => byte n is '"'
+    backslashes: u64, // bit n set => byte n is '\\'
 }
 
 /// Pre-built 64-byte needle vectors for AVX-512 comparisons.
 struct JsonParser {
-    space: [u8; 64],
+    space:     [u8; 64],
+    quote:     [u8; 64],
+    backslash: [u8; 64],
 }
 
 impl JsonParser {
     fn new() -> Self {
-        Self { space: [b' '; 64] }
+        Self {
+            space:     [b' ';  64],
+            quote:     [b'"'; 64],
+            backslash: [b'\\'; 64],
+        }
     }
 }
 
@@ -275,6 +319,8 @@ fn next_state(src: &[u8], parser: &JsonParser) -> ByteState {
     // Bits 0..len-1 set, rest clear.
     let load_mask: u64 = if src.len() == 64 { !0u64 } else { (1u64 << src.len()) - 1 };
     let whitespace: u64;
+    let quotes: u64;
+    let backslashes: u64;
     unsafe {
         std::arch::asm!(
             // Masked byte load: only load src.len() bytes, zero the rest.
@@ -283,16 +329,26 @@ fn next_state(src: &[u8], parser: &JsonParser) -> ByteState {
             // Whitespace: any byte <= 0x20 (space).
             "vpcmpub k1, zmm0, zmmword ptr [{n_space}], 2",
             "kmovq {whitespace}, k1",
-            src        = in(reg)  src.as_ptr(),
-            n_space    = in(reg)  parser.space.as_ptr(),
-            load_mask  = in(reg)  load_mask,
-            whitespace = out(reg) whitespace,
+            // Double-quote positions.
+            "vpcmpeqb k1, zmm0, zmmword ptr [{n_quote}]",
+            "kmovq {quotes}, k1",
+            // Backslash positions.
+            "vpcmpeqb k1, zmm0, zmmword ptr [{n_backslash}]",
+            "kmovq {backslashes}, k1",
+            src         = in(reg)  src.as_ptr(),
+            n_space     = in(reg)  parser.space.as_ptr(),
+            n_quote     = in(reg)  parser.quote.as_ptr(),
+            n_backslash = in(reg)  parser.backslash.as_ptr(),
+            load_mask   = in(reg)  load_mask,
+            whitespace  = out(reg) whitespace,
+            quotes      = out(reg) quotes,
+            backslashes = out(reg) backslashes,
             out("zmm0") _,
             out("k1")   _,
             options(nostack, readonly),
         );
     }
-    ByteState { whitespace }
+    ByteState { whitespace, quotes, backslashes }
 }
 
 
