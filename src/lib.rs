@@ -22,6 +22,21 @@
 //! * `F` = `AfterValue`      — after any complete value; skips whitespace, expects `,`/`}`/`]`
 //! * `R` = `ArrayStart`      — after `[` or `,` in an array; skips whitespace, dispatches value
 //! * `A` = `AtomChars`       — inside a number, `true`, `false`, or `null`
+//!
+//! A few things to notice in the annotation:
+//!
+//! * `OO`: `ObjectStart` eats the space *and* the opening `"` of a key in one
+//!   shot via the `trailing_zeros` whitespace skip.
+//! * `DD` / `CC`: `KeyEnd` eats the space *and* `:` together; `AfterColon`
+//!   eats the space *and* the value-start byte — structural punctuation costs
+//!   no extra iterations.
+//! * `SSSSSSS`: `StringChars` covers the entire `value1"` run including the
+//!   closing quote (bulk AVX-512 skip + dispatch in one pass through the chunk).
+//! * `RAAARRAAAFRRAAAF`: inside the array `[123, 456 , 768]` each `R` covers
+//!   the skip-to-digit hop; `AAA` covers the digit characters plus their
+//!   terminating `,` / space / `]`.
+//! * `KKKKKKKKKKK` (11 bytes): the 10-character `nested_key` body *and* its
+//!   closing `"` are all handled by `KeyChars` in one bulk-skip pass.
 
 
 #[derive(PartialEq)]
