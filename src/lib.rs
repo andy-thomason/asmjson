@@ -72,26 +72,26 @@ enum State {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-enum Value {
-    String(String),
+enum Value<'a> {
+    String(&'a str),
     Number(f64),
     Bool(bool),
     Null,
-    Object(Vec<(String, Value)>),
-    Array(Vec<Value>)
+    Object(Vec<(&'a str, Value<'a>)>),
+    Array(Vec<Value<'a>>)
 }
 
-fn parse_json(src: &str) -> Option<Value> {
+fn parse_json<'a>(src: &'a str) -> Option<Value<'a>> {
     let parser = JsonParser::new();
     let bytes = src.as_bytes();
     // Partially-built Object or Array sitting on the frame stack.
-    enum Frame {
-        Obj { key: String, members: Vec<(String, Value)> },
-        Arr { elements: Vec<Value> },
+    enum Frame<'a> {
+        Obj { key: &'a str, members: Vec<(&'a str, Value<'a>)> },
+        Arr { elements: Vec<Value<'a>> },
     }
 
     // Parse a completed atom string into the right Value variant.
-    fn parse_atom(s: &str) -> Value {
+    fn parse_atom<'a>(s: &'a str) -> Value<'a> {
         match s {
             "true"  => Value::Bool(true),
             "false" => Value::Bool(false),
@@ -101,19 +101,16 @@ fn parse_json(src: &str) -> Option<Value> {
     }
 
     // Push a completed Value into the top frame, or set the top-level result.
-    fn push_value(val: Value, frames: &mut Vec<Frame>, result: &mut Option<Value>) {
+    fn push_value<'a>(val: Value<'a>, frames: &mut Vec<Frame<'a>>, result: &mut Option<Value<'a>>) {
         match frames.last_mut() {
             Some(Frame::Arr { elements }) => elements.push(val),
-            Some(Frame::Obj { key, members }) => {
-                let k = std::mem::take(key);
-                members.push((k, val));
-            }
+            Some(Frame::Obj { key, members }) => members.push((*key, val)),
             None => *result = Some(val),
         }
     }
 
     // Close the top frame with `}` or `]` and push the resulting Value.
-    fn close_frame(byte: u8, frames: &mut Vec<Frame>, result: &mut Option<Value>) {
+    fn close_frame<'a>(byte: u8, frames: &mut Vec<Frame<'a>>, result: &mut Option<Value<'a>>) {
         match byte {
             b'}' => {
                 if let Some(Frame::Obj { members, .. }) = frames.pop() {
@@ -130,7 +127,9 @@ fn parse_json(src: &str) -> Option<Value> {
     }
 
     let mut frames: Vec<Frame> = Vec::new();
-    let mut buf = String::new();
+    let mut str_start: usize = 0;   // absolute byte offset of char after opening '"'
+    let mut atom_start: usize = 0;  // absolute byte offset of first atom byte
+    let mut current_key: &str = ""; // key slice captured when KeyChars closes
     let mut state = State::ValueWhitespace;
     let mut result: Option<Value> = None;
 
@@ -156,10 +155,10 @@ fn parse_json(src: &str) -> Option<Value> {
                     }
                     let byte = chunk[chunk_offset];
                     match byte {
-                        b'{' => { frames.push(Frame::Obj { key: String::new(), members: Vec::new() }); State::ObjectStart }
+                        b'{' => { frames.push(Frame::Obj { key: "", members: Vec::new() }); State::ObjectStart }
                         b'[' => { frames.push(Frame::Arr { elements: Vec::new() }); State::ArrayStart }
-                        b'"' => { buf.clear(); State::StringChars }
-                        _    => { buf.clear(); buf.push(byte as char); State::AtomChars }
+                        b'"' => { str_start = pos + chunk_offset + 1; State::StringChars }
+                        _    => { atom_start = pos + chunk_offset; State::AtomChars }
                     }
                 },
 
@@ -173,46 +172,38 @@ fn parse_json(src: &str) -> Option<Value> {
                 let unescaped_quotes = byte_state.quotes & !(byte_state.backslashes << 1);
                 let interesting = (byte_state.backslashes | unescaped_quotes) >> chunk_offset;
                 let skip = interesting.trailing_zeros() as usize;
-                let end = (chunk_offset + skip).min(chunk_len);
-                for &b in &chunk[chunk_offset..end] {
-                    buf.push(b as char);
-                }
-                chunk_offset = end;
+                chunk_offset = (chunk_offset + skip).min(chunk_len);
                 if chunk_offset >= chunk_len {
                     break 'inner;
                 }
                 let byte = chunk[chunk_offset];
                 match byte {
-                    b'\\' => { buf.push('\\'); State::StringEscape }
+                    b'\\' => State::StringEscape,
                     b'"'  => {
-                        push_value(Value::String(std::mem::take(&mut buf)), &mut frames, &mut result);
+                        push_value(Value::String(&src[str_start..pos + chunk_offset]), &mut frames, &mut result);
                         State::AfterValue
                     }
-                    _ => { buf.push(byte as char); State::StringChars }
+                    _ => State::StringChars,
                 }
             },
-            State::StringEscape => { buf.push(byte as char); State::StringChars }
+            State::StringEscape => State::StringChars,
 
             State::KeyChars => {
                 let unescaped_quotes = byte_state.quotes & !(byte_state.backslashes << 1);
                 let interesting = (byte_state.backslashes | unescaped_quotes) >> chunk_offset;
                 let skip = interesting.trailing_zeros() as usize;
-                let end = (chunk_offset + skip).min(chunk_len);
-                for &b in &chunk[chunk_offset..end] {
-                    buf.push(b as char);
-                }
-                chunk_offset = end;
+                chunk_offset = (chunk_offset + skip).min(chunk_len);
                 if chunk_offset >= chunk_len {
                     break 'inner;
                 }
                 let byte = chunk[chunk_offset];
                 match byte {
-                    b'\\' => { buf.push('\\'); State::KeyEscape }
-                    b'"'  => State::KeyEnd,
-                    _ => { buf.push(byte as char); State::KeyChars }
+                    b'\\' => State::KeyEscape,
+                    b'"'  => { current_key = &src[str_start..pos + chunk_offset]; State::KeyEnd }
+                    _ => State::KeyChars,
                 }
             },
-            State::KeyEscape => { buf.push(byte as char); State::KeyChars }
+            State::KeyEscape => State::KeyChars,
             State::KeyEnd => {
                 let ahead = (!byte_state.whitespace) >> chunk_offset;
                 let skip = ahead.trailing_zeros() as usize;
@@ -222,7 +213,7 @@ fn parse_json(src: &str) -> Option<Value> {
                 match byte {
                     b':' => {
                         if let Some(Frame::Obj { key, .. }) = frames.last_mut() {
-                            *key = std::mem::take(&mut buf);
+                            *key = current_key;
                         }
                         State::AfterColon
                     }
@@ -236,17 +227,16 @@ fn parse_json(src: &str) -> Option<Value> {
                 if chunk_offset >= chunk_len { break 'inner; }
                 let byte = chunk[chunk_offset];
                 match byte {
-                    b'{' => { frames.push(Frame::Obj { key: String::new(), members: Vec::new() }); State::ObjectStart }
+                    b'{' => { frames.push(Frame::Obj { key: "", members: Vec::new() }); State::ObjectStart }
                     b'[' => { frames.push(Frame::Arr { elements: Vec::new() }); State::ArrayStart }
-                    b'"' => { buf.clear(); State::StringChars }
-                    _    => { buf.clear(); buf.push(byte as char); State::AtomChars }
+                    b'"' => { str_start = pos + chunk_offset + 1; State::StringChars }
+                    _    => { atom_start = pos + chunk_offset; State::AtomChars }
                 }
             },
 
             State::AtomChars => match byte {
                 b if b <= b' ' || matches!(b, b',' | b'}' | b']') => {
-                    push_value(parse_atom(&buf), &mut frames, &mut result);
-                    buf.clear();
+                    push_value(parse_atom(&src[atom_start..pos + chunk_offset]), &mut frames, &mut result);
                     match byte {
                         b'}' => { close_frame(b'}', &mut frames, &mut result); State::AfterValue }
                         b']' => { close_frame(b']', &mut frames, &mut result); State::AfterValue }
@@ -258,7 +248,7 @@ fn parse_json(src: &str) -> Option<Value> {
                         _ => State::AfterValue, // whitespace delimiter
                     }
                 }
-                _ => { buf.push(byte as char); State::AtomChars }
+                _ => State::AtomChars,
             },
 
             State::ObjectStart => {
@@ -268,7 +258,7 @@ fn parse_json(src: &str) -> Option<Value> {
                 if chunk_offset >= chunk_len { break 'inner; }
                 let byte = chunk[chunk_offset];
                 match byte {
-                    b'"' => { buf.clear(); State::KeyChars }
+                    b'"' => { str_start = pos + chunk_offset + 1; State::KeyChars }
                     b'}' => {
                         close_frame(b'}', &mut frames, &mut result);
                         State::AfterValue
@@ -288,10 +278,10 @@ fn parse_json(src: &str) -> Option<Value> {
                         close_frame(b']', &mut frames, &mut result);
                         State::AfterValue
                     }
-                    b'{' => { frames.push(Frame::Obj { key: String::new(), members: Vec::new() }); State::ObjectStart }
+                    b'{' => { frames.push(Frame::Obj { key: "", members: Vec::new() }); State::ObjectStart }
                     b'[' => { frames.push(Frame::Arr { elements: Vec::new() }); State::ArrayStart }
-                    b'"' => { buf.clear(); State::StringChars }
-                    _    => { buf.clear(); buf.push(byte as char); State::AtomChars }
+                    b'"' => { str_start = pos + chunk_offset + 1; State::StringChars }
+                    _    => { atom_start = pos + chunk_offset; State::AtomChars }
                 }
             },
 
@@ -325,8 +315,8 @@ fn parse_json(src: &str) -> Option<Value> {
     }
 
     // Flush a trailing atom not followed by a delimiter (e.g. top-level `42`).
-    if state == State::AtomChars && !buf.is_empty() {
-        push_value(parse_atom(&buf), &mut frames, &mut result);
+    if state == State::AtomChars {
+        push_value(parse_atom(&src[atom_start..]), &mut frames, &mut result);
     }
 
     result
@@ -402,16 +392,16 @@ fn next_state(src: &[u8], parser: &JsonParser) -> ByteState {
 mod tests {
     use super::*;
 
-    fn run(json: &'static str) -> Option<Value> {
+    fn run(json: &'static str) -> Option<Value<'static>> {
         parse_json(json)
     }
 
-    fn s(v: &str) -> Value { Value::String(v.to_string()) }
-    fn n(v: f64)  -> Value { Value::Number(v) }
-    fn obj(members: &[(&str, Value)]) -> Value {
-        Value::Object(members.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+    fn s(v: &'static str) -> Value<'static> { Value::String(v) }
+    fn n(v: f64) -> Value<'static> { Value::Number(v) }
+    fn obj(members: &[(&'static str, Value<'static>)]) -> Value<'static> {
+        Value::Object(members.iter().map(|(k, v)| (*k, v.clone())).collect())
     }
-    fn arr(elements: Vec<Value>) -> Value { Value::Array(elements) }
+    fn arr(elements: Vec<Value<'static>>) -> Value<'static> { Value::Array(elements) }
 
     #[test]
     fn test_string() {
