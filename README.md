@@ -45,20 +45,28 @@ Use `choose_classifier` to select automatically at runtime.
 ## Benchmarks
 
 Measured on a single core with `cargo bench` against 10 MiB of synthetic JSON.
-Comparison points are `simd-json` (borrowed output, AVX2) and `serde_json`.
+Comparison points are `sonic-rs` (lazy Value, AVX2), `simd-json` (borrowed
+output, AVX2), and `serde_json`.
 
 | Parser              | string array | string object | mixed        |
 |---------------------|:------------:|:-------------:|:------------:|
-| asmjson zmm (tape)  | 8.44 GiB/s   | 5.64 GiB/s    | 397.5 MiB/s  |
-| asmjson zmm         | 6.06 GiB/s   | 5.23 GiB/s    | 265.3 MiB/s  |
-| asmjson u64         | 5.86 GiB/s   | 4.21 GiB/s    | 261.3 MiB/s  |
-| asmjson ymm         | 5.49 GiB/s   | 4.43 GiB/s    | 265.1 MiB/s  |
-| serde_json          | 2.51 GiB/s   | 0.59 GiB/s    |  95.5 MiB/s  |
-| simd-json borrowed  | 2.14 GiB/s   | 1.33 GiB/s    | 183.1 MiB/s  |
+| sonic-rs            | 11.0 GiB/s   | 6.17 GiB/s    | 969 MiB/s    |
+| asmjson zmm (tape)  | 8.36 GiB/s   | 5.72 GiB/s    | 383 MiB/s    |
+| asmjson zmm         | 6.09 GiB/s   | 5.23 GiB/s    | 262 MiB/s    |
+| asmjson u64         | 6.08 GiB/s   | 4.20 GiB/s    | 255 MiB/s    |
+| asmjson ymm         | 5.45 GiB/s   | 4.46 GiB/s    | 258 MiB/s    |
+| simd-json borrowed  | 2.13 GiB/s   | 1.32 GiB/s    | 189 MiB/s    |
+| serde_json          | 2.50 GiB/s   | 0.57 GiB/s    |  92.6 MiB/s  |
 
-The tape output is consistently the fastest because it skips object/array
-construction entirely.  The portable `u64` SWAR classifier matches or beats
-AVX2 (`ymm`) on string-heavy workloads and is competitive on mixed JSON.
+`sonic-rs` leads on string-heavy workloads because its `Value` type is lazy —
+string content remains as raw bytes in the source buffer rather than being
+unescaped at parse time.  asmjson fully decodes all escape sequences (e.g.
+`\uXXXX`) into `Cow<str>` during parsing, which is safer but slower for
+string-dominated inputs.
+
+The tape output is consistently the fastest asmjson variant because it skips
+object/array allocation entirely.  The portable `u64` SWAR classifier matches
+or beats AVX2 (`ymm`) on string-heavy workloads.
 
 ## Internal state machine
 
