@@ -547,3 +547,44 @@ the SIMD classifiers.
 #### Commit
 
 `54979e0` feat: add classify_u64 portable SWAR classifier
+
+## Session 10 — remove classify_xmm
+
+### What was done
+
+Benchmarked `classify_xmm` (SSE2) against `classify_u64` (SWAR) and found
+xmm is slower on every workload:
+
+| Workload      | xmm       | u64       |
+|---------------|-----------|-----------|
+| string\_array | 3.03 GiB/s | 5.95 GiB/s |
+| string\_object | 2.72 GiB/s | 4.20 GiB/s |
+| mixed         | 229 MiB/s  | 234 MiB/s  |
+
+`classify_xmm` was removed from `src/lib.rs`, `choose_classifier` updated
+(AVX-512BW → AVX2 → portable SWAR u64, no SSE2 step), bench entries
+removed, and all submodule test helpers (`value.rs`, `tape.rs`,
+`json_ref.rs`) updated to cross-check `classify_u64` instead of
+`classify_xmm`.
+
+### Design decisions
+
+SSE2 `classify_xmm` processes the 64-byte block as four 16-byte passes,
+each incurring a `VPMOVMSKB` movemask with cross-lane serialisation
+overhead.  The portable SWAR implementation works entirely in GP registers
+as eight independent 64-bit word operations, avoiding that bottleneck
+entirely.  Since the portable code wins unconditionally there is no reason
+to maintain the SSE2 path — any x86-64 chip that lacks AVX2 now falls
+straight through to `classify_u64`.
+
+YMM (AVX2) was checked simultaneously: u64 leads on string-heavy input
+(+12%) while ymm recovers on object-heavy input (+4%).  Net mixed result
+means ymm still earns its place as the AVX2 hardware path.
+
+### Results
+
+30/30 tests pass; zero warnings.
+
+### Commit
+
+`c6bbb9b` refactor: remove classify_xmm (slower than classify_u64 on all benchmarks)
