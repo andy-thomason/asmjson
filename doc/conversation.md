@@ -632,3 +632,45 @@ successfully on `ubuntu-latest` (AVX2 available, AVX-512 absent).
 ### Commit
 
 `b5c7265` fix: guard classify_zmm and test behind avx512bw target-feature
+
+---
+
+## Session 13 — Add sonic-rs to benchmarks
+
+### What was done
+
+Added `sonic-rs = "0.5.7"` as a dev-dependency and added a
+`sonic_rs::from_str::<sonic_rs::Value>` bench variant to all three groups
+(`string_array`, `string_object`, `mixed`).  Ran the full bench suite and
+updated the README table with sonic-rs results and refreshed numbers.
+
+### Design decisions
+
+`sonic_rs::from_str::<sonic_rs::Value>` is the closest analogue to
+`parse_json` — it produces a fully-navigable value tree from a `&str`.
+`sonic-rs` uses a lazy `Value` representation where string content remains as
+raw bytes in the source buffer; escape processing is deferred until the value
+is read.  By contrast, asmjson fully decodes `\uXXXX` / `\\` / `\"` escapes
+into `Cow<'src, str>` during the initial parse pass, which is safer and more
+ergonomic but costs throughput on string-heavy inputs.
+
+### Results
+
+| Parser              | string array | string object | mixed     |
+|---------------------|:------------:|:-------------:|:---------:|
+| sonic-rs            | 11.0 GiB/s   | 6.17 GiB/s    | 969 MiB/s |
+| asmjson zmm (tape)  | 8.36 GiB/s   | 5.72 GiB/s    | 383 MiB/s |
+| asmjson zmm         | 6.09 GiB/s   | 5.23 GiB/s    | 262 MiB/s |
+| asmjson u64         | 6.08 GiB/s   | 4.20 GiB/s    | 255 MiB/s |
+| asmjson ymm         | 5.45 GiB/s   | 4.46 GiB/s    | 258 MiB/s |
+| simd-json borrowed  | 2.13 GiB/s   | 1.32 GiB/s    | 189 MiB/s |
+| serde_json          | 2.50 GiB/s   | 0.57 GiB/s    |  92 MiB/s |
+
+sonic-rs leads on string-heavy work because of its lazy decode.  On mixed
+JSON (numbers, bools, nested objects), asmjson zmm/tape is still 2.5× faster
+than sonic-rs — likely because mixed workloads require more structural parsing
+where sonic-rs's lazy trick gives less advantage.
+
+### Commit
+
+`ee28983` bench: add sonic-rs comparison
