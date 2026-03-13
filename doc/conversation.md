@@ -279,3 +279,50 @@ eliminates entirely.
 ```
 c1fb9d4  bench: add asmjson/zmm/tape to string_object group
 ```
+---
+
+## Session 5 — mixed Tape benchmark
+
+### What was done
+
+Added an `asmjson/zmm/tape` slot to the `mixed` criterion group to compare
+`parse_json` vs `parse_to_tape` on the deeply-nested mixed workload.
+
+### Results
+
+Workload: ~10 MiB array of objects, each with numbers, booleans, nulls, a
+nested array, and a nested object (~130 bytes per record).
+
+| variant | throughput |
+|---|---|
+| `asmjson/zmm` — `parse_json` → `Value` tree | 254 MiB/s |
+| `asmjson/zmm/tape` — `parse_to_tape` → `Tape` | 392 MiB/s |
+
+**~54% faster** with the Tape on this workload.
+
+### Analysis
+
+The mixed workload allocates at multiple nesting levels: an outer `Box<[Value]>`
+for the top-level array, and inside each record a `Box<[...]>` for the `tags`
+array and the `meta` object, plus the record object itself.  Every `}` / `]`
+triggers a heap allocation to box the collected members.  The Tape avoids all
+of this — it is a single flat `Vec<TapeEntry>` grown incrementally with no
+per-close allocation.
+
+The absolute throughput (254 / 392 MiB/s) is much lower than on the
+string-only workloads (5–8 GiB/s) because the mixed data has short strings and
+dense structural characters, so the state machine visits more states per byte.
+
+### Overall Tape speedup summary
+
+| workload | Value tree | Tape | speedup |
+|---|---|---|---|
+| string_array | 6.25 GiB/s | 8.56 GiB/s | +37% |
+| string_object | 5.29 GiB/s | 5.53 GiB/s | +5% |
+| mixed | 254 MiB/s | 392 MiB/s | +54% |
+
+### Commit
+
+```
+8edf785  bench: add asmjson/zmm/tape to mixed group
+```
