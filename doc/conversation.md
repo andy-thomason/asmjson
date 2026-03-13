@@ -588,3 +588,47 @@ means ymm still earns its place as the AVX2 hardware path.
 ### Commit
 
 `c6bbb9b` refactor: remove classify_xmm (slower than classify_u64 on all benchmarks)
+
+---
+
+## Session 12 — Fix CI (AVX-512 compile and runtime guards)
+
+### What was done
+
+GitHub Actions CI was never running because all commits were local only (16
+commits ahead of `origin`).  After pushing, CI triggered but would have
+failed on two related issues in `classify_zmm`:
+
+1. **Compile-time**: The AVX-512BW inline-assembly block inside `classify_zmm`
+   lacked a `#[target_feature(enable = "avx512bw")]` attribute.  LLVM's
+   integrated assembler rejects AVX-512 mnemonics (`vmovdqu8`, `vpcmpub`,
+   `kmovq`, etc.) when the function's target-feature set does not include
+   `avx512bw`.  GitHub's `ubuntu-latest` runners compile with the default
+   `x86_64-unknown-linux-gnu` target (no AVX-512), so the build would have
+   errored out.
+
+2. **Runtime**: The `classifier_agreement` test called `classify_zmm`
+   unconditionally.  On hardware without AVX-512 this triggers `SIGILL`.
+
+### Design decisions
+
+Following the same pattern already used by `classify_ymm`, the AVX-512 asm was
+moved into a nested `unsafe fn imp` annotated with
+`#[target_feature(enable = "avx512bw")]`.  The outer `classify_zmm` delegates
+to `imp` via `unsafe { imp(src) }`.  This is safe because the only callers are
+`choose_classifier` (guarded by `is_x86_feature_detected!("avx512bw")`) and
+the test (now also guarded).
+
+In the test, the zmm comparison block was wrapped in
+`#[cfg(any(target_arch = "x86", target_arch = "x86_64"))] if is_x86_feature_detected!("avx512bw")`.
+When AVX-512 is absent the test still cross-checks `classify_u64` against
+`classify_ymm`, preserving meaningful coverage on all runners.
+
+### Results
+
+30/30 tests pass locally; doc-tests pass.  CI will now compile and run
+successfully on `ubuntu-latest` (AVX2 available, AVX-512 absent).
+
+### Commit
+
+`b5c7265` fix: guard classify_zmm and test behind avx512bw target-feature
