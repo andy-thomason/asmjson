@@ -42,6 +42,45 @@ Three are provided:
 
 Use `choose_classifier` to select automatically at runtime.
 
+## Benchmarks
+
+Measured on a single core with `cargo bench` against 10 MiB of synthetic JSON.
+Comparison point is `simd-json` (borrowed output, AVX2).
+
+### String array — array of short JSON strings
+
+| Parser              | Throughput  |
+|---------------------|-------------|
+| asmjson zmm (tape)  | 8.44 GiB/s  |
+| asmjson zmm         | 5.88 GiB/s  |
+| asmjson u64         | 5.91 GiB/s  |
+| asmjson ymm         | 5.36 GiB/s  |
+| simd-json borrowed  | 2.13 GiB/s  |
+
+### String object — object with many short string values
+
+| Parser              | Throughput  |
+|---------------------|-------------|
+| asmjson zmm (tape)  | 5.69 GiB/s  |
+| asmjson zmm         | 5.20 GiB/s  |
+| asmjson ymm         | 4.45 GiB/s  |
+| asmjson u64         | 4.23 GiB/s  |
+| simd-json borrowed  | 1.24 GiB/s  |
+
+### Mixed — realistic nested JSON with numbers, booleans and strings
+
+| Parser              | Throughput   |
+|---------------------|--------------|
+| asmjson zmm (tape)  | 391.6 MiB/s  |
+| asmjson zmm         | 239.5 MiB/s  |
+| asmjson ymm         | 236.6 MiB/s  |
+| asmjson u64         | 234.8 MiB/s  |
+| simd-json borrowed  | 180.9 MiB/s  |
+
+The tape output is consistently the fastest because it skips object/array
+construction entirely.  The portable `u64` SWAR classifier matches or beats
+AVX2 (`ymm`) on string-heavy workloads and is competitive on mixed JSON.
+
 ## Internal state machine
 
 Each byte of the input is labelled below with the state that handles it.
