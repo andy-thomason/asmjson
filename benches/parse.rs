@@ -4,7 +4,7 @@ use asmjson::choose_classifier;
 use asmjson::parse_to_tape as parse_json;
 #[cfg(feature = "stats")]
 use asmjson::stats;
-use asmjson::{TapeEntry, classify_zmm, parse_to_tape};
+use asmjson::{TapeEntry, classify_u64, classify_zmm, parse_to_tape};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
 // ---------------------------------------------------------------------------
@@ -22,6 +22,20 @@ fn tape_sum_lens(tape: &asmjson::Tape<'_>) -> usize {
             _ => 0,
         })
         .sum()
+}
+
+/// Recursively sum the lengths of every string value and object key in a
+/// serde_json Value tree.
+fn serde_sum_lens(v: &serde_json::Value) -> usize {
+    match v {
+        serde_json::Value::String(s) => s.len(),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .map(|(k, val)| k.len() + serde_sum_lens(val))
+            .sum(),
+        serde_json::Value::Array(arr) => arr.iter().map(serde_sum_lens).sum(),
+        _ => 0,
+    }
 }
 
 /// Recursively sum the lengths of every string value and object key in a
@@ -208,27 +222,22 @@ fn bench_string_array(c: &mut Criterion) {
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
-    // group.bench_with_input(
-    //     BenchmarkId::new("simd-json", "borrowed"),
-    //     &data.as_bytes().to_vec(),
-    //     |b, input| {
-    //         b.iter_batched(
-    //             || input.clone(),
-    //             |mut buf| {
-    //                 drop(simd_json::to_borrowed_value(&mut buf).unwrap());
-    //                 std::hint::black_box(buf)
-    //             },
-    //             criterion::BatchSize::LargeInput,
-    //         );
-    //     },
-    // );
-    // group.bench_function("serde_json", |b| {
-    //     b.iter(|| std::hint::black_box(serde_json::from_str::<serde_json::Value>(&data).unwrap()));
-    // });
+    group.bench_function("asmjson/u64", |b| {
+        b.iter(|| {
+            let tape = parse_to_tape(&data, classify_u64).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
+    });
     group.bench_function("sonic-rs", |b| {
         b.iter(|| {
             let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
             std::hint::black_box(sonic_sum_lens(&v))
+        });
+    });
+    group.bench_function("serde_json", |b| {
+        b.iter(|| {
+            let v = serde_json::from_str::<serde_json::Value>(&data).unwrap();
+            std::hint::black_box(serde_sum_lens(&v))
         });
     });
     group.finish();
@@ -246,27 +255,22 @@ fn bench_string_object(c: &mut Criterion) {
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
-    // group.bench_with_input(
-    //     BenchmarkId::new("simd-json", "borrowed"),
-    //     &data.as_bytes().to_vec(),
-    //     |b, input| {
-    //         b.iter_batched(
-    //             || input.clone(),
-    //             |mut buf| {
-    //                 drop(simd_json::to_borrowed_value(&mut buf).unwrap());
-    //                 std::hint::black_box(buf)
-    //             },
-    //             criterion::BatchSize::LargeInput,
-    //         );
-    //     },
-    // );
-    // group.bench_function("serde_json", |b| {
-    //     b.iter(|| std::hint::black_box(serde_json::from_str::<serde_json::Value>(&data).unwrap()));
-    // });
+    group.bench_function("asmjson/u64", |b| {
+        b.iter(|| {
+            let tape = parse_to_tape(&data, classify_u64).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
+    });
     group.bench_function("sonic-rs", |b| {
         b.iter(|| {
             let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
             std::hint::black_box(sonic_sum_lens(&v))
+        });
+    });
+    group.bench_function("serde_json", |b| {
+        b.iter(|| {
+            let v = serde_json::from_str::<serde_json::Value>(&data).unwrap();
+            std::hint::black_box(serde_sum_lens(&v))
         });
     });
     group.finish();
@@ -284,28 +288,22 @@ fn bench_mixed(c: &mut Criterion) {
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
-    // let bytes = data.as_bytes().to_vec();
-    // group.bench_with_input(
-    //     BenchmarkId::new("simd-json", "borrowed"),
-    //     &bytes,
-    //     |b, input| {
-    //         b.iter_batched(
-    //             || input.clone(),
-    //             |mut buf| {
-    //                 drop(simd_json::to_borrowed_value(&mut buf).unwrap());
-    //                 std::hint::black_box(buf)
-    //             },
-    //             criterion::BatchSize::LargeInput,
-    //         );
-    //     },
-    // );
-    // group.bench_function("serde_json", |b| {
-    //     b.iter(|| std::hint::black_box(serde_json::from_str::<serde_json::Value>(&data).unwrap()));
-    // });
+    group.bench_function("asmjson/u64", |b| {
+        b.iter(|| {
+            let tape = parse_to_tape(&data, classify_u64).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
+    });
     group.bench_function("sonic-rs", |b| {
         b.iter(|| {
             let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
             std::hint::black_box(sonic_sum_lens(&v))
+        });
+    });
+    group.bench_function("serde_json", |b| {
+        b.iter(|| {
+            let v = serde_json::from_str::<serde_json::Value>(&data).unwrap();
+            std::hint::black_box(serde_sum_lens(&v))
         });
     });
     group.finish();
