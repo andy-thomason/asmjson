@@ -539,7 +539,16 @@ fn tape_skip(entries: &[TapeEntry<'_>], pos: usize) -> usize {
 /// Implemented by:
 /// - `&'a Value<'a>` — borrows a tree [`Value`].
 /// - [`TapeRef<'a, _>`] — lightweight cursor into a flat [`Tape`].
+/// - `Option<J>` where `J: JsonRef<'a>` — transparent wrapper enabling chaining
+///   without intermediate `?` or `.and_then`: `root.get("a").get("b").as_str()`.
 pub trait JsonRef<'a>: Sized + Copy {
+    /// The concrete node type returned by [`get`](JsonRef::get) and
+    /// [`index_at`](JsonRef::index_at).
+    ///
+    /// For concrete node types (`&'a Value<'a>`, [`TapeRef`]) this is `Self`.
+    /// For `Option<J>` it is `J::Item`, keeping chains flat:
+    /// `opt.get("a")` returns `Option<J::Item>`, not `Option<Option<J>>`.
+    type Item: JsonRef<'a>;
     // ------------------------------------------------------------------
     // Type-test helpers (all have default implementations)
     // ------------------------------------------------------------------
@@ -606,12 +615,12 @@ pub trait JsonRef<'a>: Sized + Copy {
     /// Look up an object member by key.
     ///
     /// Returns `None` if this value is not an object or the key is absent.
-    fn get(self, key: &str) -> Option<Self>;
+    fn get(self, key: &str) -> Option<Self::Item>;
 
     /// Index into an array by zero-based position.
     ///
     /// Returns `None` if this value is not an array or `i` is out of bounds.
-    fn index_at(self, i: usize) -> Option<Self>;
+    fn index_at(self, i: usize) -> Option<Self::Item>;
 
     /// Returns the number of elements (array) or key-value pairs (object).
     ///
@@ -624,6 +633,8 @@ pub trait JsonRef<'a>: Sized + Copy {
 // ---------------------------------------------------------------------------
 
 impl<'a> JsonRef<'a> for &'a Value<'a> {
+    type Item = Self;
+
     fn is_array(self) -> bool {
         matches!(self, Value::Array(_))
     }
@@ -693,6 +704,8 @@ impl<'a> JsonRef<'a> for &'a Value<'a> {
 // ---------------------------------------------------------------------------
 
 impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
+    type Item = Self;
+
     fn is_array(self) -> bool {
         matches!(&self.tape[self.pos], TapeEntry::StartArray(_))
     }
@@ -797,6 +810,58 @@ impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
             }
             _ => None,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JsonRef impl for Option<J> — enables x.get("a").get("b") chaining
+// ---------------------------------------------------------------------------
+
+/// Blanket implementation of [`JsonRef`] for `Option<J>` where `J: JsonRef`.
+///
+/// Every accessor returns the same result as calling it on the inner value,
+/// or the appropriate "absent" answer when `self` is `None`:
+///
+/// - Boolean tests (`is_*`) return `false`.
+/// - `as_*` accessors return `None`.
+/// - `get`, `index_at`, `len` return `None`.
+///
+/// This allows chaining without intermediate `?` or `.and_then`:
+///
+/// ```rust,ignore
+/// let city = root.get("address").get("city").as_str();
+/// let first = root.get("items").index_at(0).as_i64();
+/// ```
+impl<'a, J: JsonRef<'a>> JsonRef<'a> for Option<J> {
+    /// Chaining stays flat: `Option<J>` produces the same item type as `J`.
+    type Item = J::Item;
+
+    fn is_array(self) -> bool {
+        self.is_some_and(|v| v.is_array())
+    }
+    fn is_object(self) -> bool {
+        self.is_some_and(|v| v.is_object())
+    }
+    fn as_null(self) -> Option<()> {
+        self?.as_null()
+    }
+    fn as_bool(self) -> Option<bool> {
+        self?.as_bool()
+    }
+    fn as_number_str(self) -> Option<&'a str> {
+        self?.as_number_str()
+    }
+    fn as_str(self) -> Option<&'a str> {
+        self?.as_str()
+    }
+    fn get(self, key: &str) -> Option<J::Item> {
+        self?.get(key)
+    }
+    fn index_at(self, i: usize) -> Option<J::Item> {
+        self?.index_at(i)
+    }
+    fn len(self) -> Option<usize> {
+        self?.len()
     }
 }
 
@@ -2188,5 +2253,39 @@ mod tests {
         let (v, t) = run_both(src);
         assert_eq!(first_item(&v), Some(7));
         assert_eq!(first_item(t.root().unwrap()), Some(7));
+    }
+
+    #[test]
+    fn jsonref_option_chaining() {
+        // The key feature: x.get("a").get("b") without intermediate ? or and_then.
+        use crate::JsonRef;
+        let src = r#"{"a":{"b":{"c":42}},"arr":[10,20,30]}"#;
+        let (v, t) = run_both(src);
+
+        // Three-level object chain — &Value
+        assert_eq!((&v).get("a").get("b").get("c").as_i64(), Some(42));
+        // Missing key at any point short-circuits to None
+        assert!((&v).get("a").get("missing").get("c").as_i64().is_none());
+        assert!((&v).get("none").get("b").as_i64().is_none());
+
+        // Three-level object chain — TapeRef
+        let tr = t.root().unwrap();
+        assert_eq!(tr.get("a").get("b").get("c").as_i64(), Some(42));
+        assert!(tr.get("a").get("missing").get("c").as_i64().is_none());
+        assert!(tr.get("none").get("b").as_i64().is_none());
+
+        // Mix get + index_at chaining
+        let src2 = r#"{"items":[{"val":1},{"val":2},{"val":3}]}"#;
+        let (v2, t2) = run_both(src2);
+        assert_eq!((&v2).get("items").index_at(1).get("val").as_i64(), Some(2));
+        assert_eq!(
+            t2.root()
+                .unwrap()
+                .get("items")
+                .index_at(1)
+                .get("val")
+                .as_i64(),
+            Some(2)
+        );
     }
 }

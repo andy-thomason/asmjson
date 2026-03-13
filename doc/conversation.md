@@ -394,3 +394,52 @@ Six new tests added (29 total): `jsonref_scalars_value/tape`, `jsonref_object_ge
 ```
 9b5f27c  feat: add JsonRef trait + TapeRef cursor
 ```
+
+---
+
+## Session 7 — JsonRef chaining via Option<J>
+
+### Motivation
+
+`x.get("a").get("b")` was broken by the original trait design: `get` returned
+`Option<Self>`, so calling `.get("b")` on `Option<J>` would have to return
+`Option<Option<J>>`, defeating flat chaining.
+
+### Design decision: associated `type Item`
+
+The fix is to add `type Item: JsonRef<'a>` to the trait and change `get` /
+`index_at` to return `Option<Self::Item>` instead of `Option<Self>`.
+
+| impl | `type Item` | effect |
+|---|---|---|
+| `&'a Value<'a>` | `Self` | no change |
+| `TapeRef<'t,'src>` | `Self` | no change |
+| `Option<J>` | `J::Item` | chain stays flat |
+
+The key insight: `Option<J>::Item = J::Item` (not `Option<J>`), so chaining
+never wraps more deeply.
+
+```rust
+root.get("address").get("city").as_str()
+root.get("items").index_at(0).get("val").as_i64()
+```
+
+### Implementation
+
+- Added `type Item: JsonRef<'a>` to `JsonRef` trait definition.
+- Changed `fn get` / `fn index_at` signatures to return `Option<Self::Item>`.
+- Added `type Item = Self` to both concrete impls (no change in practice).
+- Fixed `Option<J>` impl: `type Item = J::Item`, `get`/`index_at` delegate via
+  `self?.get(key)` returning `Option<J::Item>`.
+
+### Test
+
+`jsonref_option_chaining`: three-level `.get().get().get()` on both `&Value`
+and `TapeRef`, missing-key short-circuit, mixed `.get().index_at().get()`.
+30 tests passing.
+
+### Commit
+
+```
+413c41f  feat: impl JsonRef for Option<J> with type Item for flat chaining
+```
