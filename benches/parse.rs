@@ -1,7 +1,7 @@
 #[cfg(feature = "stats")]
 use asmjson::choose_classifier;
 #[cfg(feature = "stats")]
-use asmjson::parse_json;
+use asmjson::parse_to_tape as parse_json;
 #[cfg(feature = "stats")]
 use asmjson::stats;
 use asmjson::{TapeEntry, classify_zmm, parse_to_tape};

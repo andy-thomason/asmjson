@@ -1,5 +1,4 @@
 use crate::tape::{TapeEntry, TapeRef, tape_skip};
-use crate::value::Value;
 
 // ---------------------------------------------------------------------------
 // JsonRef trait
@@ -12,7 +11,6 @@ use crate::value::Value;
 /// least `'a`.
 ///
 /// Implemented by:
-/// - `&'a Value<'a>` — borrows a tree [`Value`].
 /// - [`TapeRef<'a, _>`] — lightweight cursor into a flat [`crate::tape::Tape`].
 /// - `Option<J>` where `J: JsonRef<'a>` — transparent wrapper enabling chaining
 ///   without intermediate `?` or `.and_then`: `root.get("a").get("b").as_str()`.
@@ -20,7 +18,7 @@ pub trait JsonRef<'a>: Sized + Copy {
     /// The concrete node type returned by [`get`](JsonRef::get) and
     /// [`index_at`](JsonRef::index_at).
     ///
-    /// For concrete node types (`&'a Value<'a>`, [`TapeRef`]) this is `Self`.
+    /// For concrete node types ([`TapeRef`]) this is `Self`.
     /// For `Option<J>` it is `J::Item`, keeping chains flat:
     /// `opt.get("a")` returns `Option<J::Item>`, not `Option<Option<J>>`.
     type Item: JsonRef<'a>;
@@ -102,77 +100,6 @@ pub trait JsonRef<'a>: Sized + Copy {
     ///
     /// Returns `None` if this value is neither an array nor an object.
     fn len(self) -> Option<usize>;
-}
-
-// ---------------------------------------------------------------------------
-// JsonRef impl for &'a Value<'a>
-// ---------------------------------------------------------------------------
-
-impl<'a> JsonRef<'a> for &'a Value<'a> {
-    type Item = Self;
-
-    fn is_array(self) -> bool {
-        matches!(self, Value::Array(_))
-    }
-
-    fn is_object(self) -> bool {
-        matches!(self, Value::Object(_))
-    }
-
-    fn as_null(self) -> Option<()> {
-        matches!(self, Value::Null).then_some(())
-    }
-
-    fn as_bool(self) -> Option<bool> {
-        if let Value::Bool(b) = self {
-            Some(*b)
-        } else {
-            None
-        }
-    }
-
-    fn as_number_str(self) -> Option<&'a str> {
-        if let Value::Number(s) = self {
-            Some(s)
-        } else {
-            None
-        }
-    }
-
-    fn as_str(self) -> Option<&'a str> {
-        if let Value::String(s) = self {
-            Some(s.as_ref())
-        } else {
-            None
-        }
-    }
-
-    fn get(self, key: &str) -> Option<Self> {
-        if let Value::Object(pairs) = self {
-            pairs
-                .iter()
-                .find(|(k, _)| k.as_ref() == key)
-                .map(|(_, v)| v)
-        } else {
-            None
-        }
-    }
-
-    fn index_at(self, i: usize) -> Option<Self> {
-        if let Value::Array(items) = self {
-            items.get(i)
-        } else {
-            None
-        }
-    }
-
-    fn len(self) -> Option<usize> {
-        match self {
-            Value::Array(items) => Some(items.len()),
-            Value::Object(pairs) => Some(pairs.len()),
-            _ => None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,23 +275,13 @@ impl<'a, J: JsonRef<'a>> JsonRef<'a> for Option<J> {
 #[cfg(test)]
 mod tests {
     use crate::tape::Tape;
-    use crate::value::Value;
-    use crate::{choose_classifier, classify_u64, classify_ymm, parse_json, parse_to_tape};
+    use crate::{choose_classifier, classify_u64, classify_ymm, parse_to_tape};
 
     use super::JsonRef;
 
     // -----------------------------------------------------------------------
     // Helpers duplicated from value/tape test modules
     // -----------------------------------------------------------------------
-
-    fn run(json: &'static str) -> Option<Value<'static>> {
-        let x = parse_json(json, classify_u64);
-        let y = parse_json(json, classify_ymm);
-        let z = parse_json(json, choose_classifier());
-        assert_eq!(x, y, "U64 vs YMM differ for: {json:?}");
-        assert_eq!(y, z, "YMM vs ZMM differ for: {json:?}");
-        z
-    }
 
     fn run_tape(json: &'static str) -> Option<Tape<'static>> {
         let x = parse_to_tape(json, classify_u64);
@@ -383,55 +300,24 @@ mod tests {
         z
     }
 
-    fn run_both(src: &'static str) -> (Value<'static>, Tape<'static>) {
-        let v = run(src).unwrap();
-        let t = run_tape(src).unwrap();
-        (v, t)
-    }
-
     // -----------------------------------------------------------------------
     // JsonRef tests — exercise the trait on both &Value and TapeRef
     // -----------------------------------------------------------------------
 
     #[test]
-    fn jsonref_scalars_value() {
-        let (v, _) = run_both("null");
-        assert!((&v).is_null());
-        assert!((&v).as_null().is_some());
-
-        let (v, _) = run_both("true");
-        assert!((&v).is_bool());
-        assert_eq!((&v).as_bool(), Some(true));
-
-        let (v, _) = run_both("false");
-        assert_eq!((&v).as_bool(), Some(false));
-
-        let (v, _) = run_both("42");
-        assert!((&v).is_number());
-        assert_eq!((&v).as_number_str(), Some("42"));
-        assert_eq!((&v).as_i64(), Some(42));
-        assert_eq!((&v).as_u64(), Some(42));
-        assert_eq!((&v).as_f64(), Some(42.0));
-
-        let (v, _) = run_both(r#""hello""#);
-        assert!((&v).is_string());
-        assert_eq!((&v).as_str(), Some("hello"));
-    }
-
-    #[test]
     fn jsonref_scalars_tape() {
-        let (_, t) = run_both("null");
+        let t = run_tape("null").unwrap();
         let r = t.root().unwrap();
         assert!(r.is_null());
         assert!(r.as_null().is_some());
 
-        let (_, t) = run_both("true");
+        let t = run_tape("true").unwrap();
         assert_eq!(t.root().unwrap().as_bool(), Some(true));
 
-        let (_, t) = run_both("false");
+        let t = run_tape("false").unwrap();
         assert_eq!(t.root().unwrap().as_bool(), Some(false));
 
-        let (_, t) = run_both("42");
+        let t = run_tape("42").unwrap();
         let r = t.root().unwrap();
         assert!(r.is_number());
         assert_eq!(r.as_number_str(), Some("42"));
@@ -439,25 +325,14 @@ mod tests {
         assert_eq!(r.as_u64(), Some(42));
         assert_eq!(r.as_f64(), Some(42.0));
 
-        let (_, t) = run_both(r#""hello""#);
+        let t = run_tape(r#""hello""#).unwrap();
         assert_eq!(t.root().unwrap().as_str(), Some("hello"));
     }
 
     #[test]
     fn jsonref_object_get() {
         let src = r#"{"x":1,"y":"hi","z":true}"#;
-        let (v, t) = run_both(src);
-
-        // &Value
-        let vr = &v;
-        assert!(vr.is_object());
-        assert_eq!(vr.get("x").and_then(|v| v.as_i64()), Some(1));
-        assert_eq!(vr.get("y").and_then(|v| v.as_str()), Some("hi"));
-        assert_eq!(vr.get("z").and_then(|v| v.as_bool()), Some(true));
-        assert!(vr.get("missing").is_none());
-        assert_eq!(vr.len(), Some(3));
-
-        // TapeRef
+        let t = run_tape(src).unwrap();
         let tr = t.root().unwrap();
         assert!(tr.is_object());
         assert_eq!(tr.get("x").and_then(|r| r.as_i64()), Some(1));
@@ -470,19 +345,7 @@ mod tests {
     #[test]
     fn jsonref_array_index() {
         let src = r#"[1,"two",false,null]"#;
-        let (v, t) = run_both(src);
-
-        // &Value
-        let vr = &v;
-        assert!(vr.is_array());
-        assert_eq!(vr.len(), Some(4));
-        assert_eq!(vr.index_at(0).and_then(|v| v.as_i64()), Some(1));
-        assert_eq!(vr.index_at(1).and_then(|v| v.as_str()), Some("two"));
-        assert_eq!(vr.index_at(2).and_then(|v| v.as_bool()), Some(false));
-        assert!(vr.index_at(3).unwrap().is_null());
-        assert!(vr.index_at(4).is_none());
-
-        // TapeRef
+        let t = run_tape(src).unwrap();
         let tr = t.root().unwrap();
         assert!(tr.is_array());
         assert_eq!(tr.len(), Some(4));
@@ -496,24 +359,7 @@ mod tests {
     #[test]
     fn jsonref_nested() {
         let src = r#"{"items":[10,20,30],"meta":{"count":3}}"#;
-        let (v, t) = run_both(src);
-
-        // &Value path: v["items"][1] == 20
-        let vr = &v;
-        assert_eq!(
-            vr.get("items")
-                .and_then(|a| a.index_at(1))
-                .and_then(|n| n.as_i64()),
-            Some(20)
-        );
-        assert_eq!(
-            vr.get("meta")
-                .and_then(|o| o.get("count"))
-                .and_then(|n| n.as_i64()),
-            Some(3)
-        );
-
-        // TapeRef same paths
+        let t = run_tape(src).unwrap();
         let tr = t.root().unwrap();
         assert_eq!(
             tr.get("items")
@@ -531,38 +377,25 @@ mod tests {
 
     #[test]
     fn jsonref_generic_fn() {
-        // Verify a generic function works over both representations.
         fn first_item<'a, J: JsonRef<'a>>(val: J) -> Option<i64> {
             val.index_at(0)?.as_i64()
         }
         let src = "[7,8,9]";
-        let (v, t) = run_both(src);
-        assert_eq!(first_item(&v), Some(7));
+        let t = run_tape(src).unwrap();
         assert_eq!(first_item(t.root().unwrap()), Some(7));
     }
 
     #[test]
     fn jsonref_option_chaining() {
-        // The key feature: x.get("a").get("b") without intermediate ? or and_then.
         let src = r#"{"a":{"b":{"c":42}},"arr":[10,20,30]}"#;
-        let (v, t) = run_both(src);
-
-        // Three-level object chain — &Value
-        assert_eq!((&v).get("a").get("b").get("c").as_i64(), Some(42));
-        // Missing key at any point short-circuits to None
-        assert!((&v).get("a").get("missing").get("c").as_i64().is_none());
-        assert!((&v).get("none").get("b").as_i64().is_none());
-
-        // Three-level object chain — TapeRef
+        let t = run_tape(src).unwrap();
         let tr = t.root().unwrap();
         assert_eq!(tr.get("a").get("b").get("c").as_i64(), Some(42));
         assert!(tr.get("a").get("missing").get("c").as_i64().is_none());
         assert!(tr.get("none").get("b").as_i64().is_none());
 
-        // Mix get + index_at chaining
         let src2 = r#"{"items":[{"val":1},{"val":2},{"val":3}]}"#;
-        let (v2, t2) = run_both(src2);
-        assert_eq!((&v2).get("items").index_at(1).get("val").as_i64(), Some(2));
+        let t2 = run_tape(src2).unwrap();
         assert_eq!(
             t2.root()
                 .unwrap()

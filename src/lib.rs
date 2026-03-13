@@ -4,14 +4,11 @@ use std::borrow::Cow;
 
 pub mod json_ref;
 pub mod tape;
-pub mod value;
 
 pub use json_ref::JsonRef;
 pub use tape::{Tape, TapeArrayIter, TapeEntry, TapeObjectIter, TapeRef};
-pub use value::Value;
 
 use tape::TapeWriter;
-use value::{ValueWriter, is_valid_json_number};
 
 // ---------------------------------------------------------------------------
 // Optional state-entry statistics (compiled in with --features stats).
@@ -183,6 +180,54 @@ pub trait JsonWriter<'src> {
 // Atom helper — writes a number / bool / null through any JsonWriter
 // ---------------------------------------------------------------------------
 
+fn is_valid_json_number(s: &[u8]) -> bool {
+    let mut i = 0;
+    let n = s.len();
+    if n == 0 {
+        return false;
+    }
+    if s[i] == b'-' {
+        i += 1;
+        if i == n {
+            return false;
+        }
+    }
+    if s[i] == b'0' {
+        i += 1;
+        if i < n && s[i].is_ascii_digit() {
+            return false;
+        }
+    } else if s[i].is_ascii_digit() {
+        while i < n && s[i].is_ascii_digit() {
+            i += 1;
+        }
+    } else {
+        return false;
+    }
+    if i < n && s[i] == b'.' {
+        i += 1;
+        if i == n || !s[i].is_ascii_digit() {
+            return false;
+        }
+        while i < n && s[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    if i < n && (s[i] == b'e' || s[i] == b'E') {
+        i += 1;
+        if i < n && (s[i] == b'+' || s[i] == b'-') {
+            i += 1;
+        }
+        if i == n || !s[i].is_ascii_digit() {
+            return false;
+        }
+        while i < n && s[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    i == n
+}
+
 fn write_atom<'a, W: JsonWriter<'a>>(s: &'a str, w: &mut W) -> bool {
     match s {
         "true" => {
@@ -212,28 +257,13 @@ fn write_atom<'a, W: JsonWriter<'a>>(s: &'a str, w: &mut W) -> bool {
 // Public parse entry points
 // ---------------------------------------------------------------------------
 
-/// Parse `src` into a [`Value`] tree using the given classifier.
-///
-/// Returns `None` if the input is not valid JSON.
-///
-/// ```rust
-/// use asmjson::{parse_json, choose_classifier, JsonRef};
-/// let v = parse_json(r#"[1, "two", true]"#, choose_classifier()).unwrap();
-/// assert_eq!(v.index_at(1).as_str(), Some("two"));
-/// ```
-pub fn parse_json<'a>(src: &'a str, classify: ClassifyFn) -> Option<Value<'a>> {
-    parse_with(src, classify, ValueWriter::new())
-}
-
 /// Parse `src` into a flat [`Tape`] using the given classifier.
 ///
 /// Returns `None` if the input is not valid JSON.
 ///
-/// The tape is more efficient than a [`Value`] tree for large inputs because it
-/// avoids recursive allocation.  `StartObject(n)` / `StartArray(n)` entries
-/// carry the index of the matching closer so entire subtrees can be skipped in
-/// O(1).  Access the tape via [`Tape::root`] which returns a [`TapeRef`] cursor
-/// that implements [`JsonRef`].
+/// `StartObject(n)` / `StartArray(n)` entries carry the index of the matching
+/// closer so entire subtrees can be skipped in O(1).  Access the tape via
+/// [`Tape::root`] which returns a [`TapeRef`] cursor that implements [`JsonRef`].
 ///
 /// ```rust
 /// use asmjson::{parse_to_tape, choose_classifier, JsonRef};

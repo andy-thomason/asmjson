@@ -11,13 +11,13 @@ string bodies to be skipped in a single operation.
 ## Quick start
 
 ```rust
-use asmjson::{parse_json, choose_classifier, JsonRef};
+use asmjson::{parse_to_tape, choose_classifier, JsonRef};
 
 let classify = choose_classifier(); // picks best for the current CPU
-let value = parse_json(r#"{"name":"Alice","age":30}"#, classify).unwrap();
+let tape = parse_to_tape(r#"{"name":"Alice","age":30}"#, classify).unwrap();
 
-assert_eq!(value.get("name").as_str(), Some("Alice"));
-assert_eq!(value.get("age").as_i64(), Some(30));
+assert_eq!(tape.root().get("name").as_str(), Some("Alice"));
+assert_eq!(tape.root().get("age").as_i64(), Some(30));
 ```
 
 For repeated parses, store the result of `choose_classifier` in a static once
@@ -25,7 +25,6 @@ cell or pass it through your application rather than calling it on every parse.
 
 ## Output formats
 
-- `parse_json` — allocates a nested `Value` tree (convenient, heap-allocated).
 - `parse_to_tape` — allocates a flat `Tape` of tokens with O(1) structural skips.
 - `parse_with` — drives a custom `JsonWriter` sink; zero extra allocation.
 
