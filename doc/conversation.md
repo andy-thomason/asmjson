@@ -326,3 +326,71 @@ dense structural characters, so the state machine visits more states per byte.
 ```
 8edf785  bench: add asmjson/zmm/tape to mixed group
 ```
+```
+
+---
+
+## Session 6 — JsonRef read-only accessor trait
+
+### Motivation
+
+Having both a `Value` tree and a flat `Tape` as parse outputs created an
+ergonomics problem: code consuming parsed JSON had to hardcode which
+representation to use.  The request was to model `serde_json::Value`'s
+accessor API as a trait so that generic functions work with either.
+
+### Design
+
+`pub trait JsonRef<'a>: Sized + Copy` — `'a` is the string-access lifetime;
+`&'a str` returned from `as_str` / `as_number_str` is valid for at least `'a`.
+
+Methods mirror `serde_json::Value`:
+
+| method | notes |
+|---|---|
+| `is_null / is_bool / is_number / is_string` | default impls via `as_*` |
+| `is_array / is_object` | required |
+| `as_null / as_bool / as_number_str / as_str` | required |
+| `as_i64 / as_u64 / as_f64` | default: `as_number_str()?.parse().ok()` |
+| `get(key: &str) -> Option<Self>` | object key lookup |
+| `index_at(i: usize) -> Option<Self>` | array positional lookup |
+| `len() -> Option<usize>` | element / pair count |
+
+#### TapeRef
+
+A new `pub struct TapeRef<'t, 'src: 't>` carries `tape: &'t [TapeEntry<'src>]`
+and `pos: usize` using two lifetimes:
+
+- `'t`   = borrow of the tape's `Vec` (typically the caller's stack frame).
+- `'src` = the source JSON bytes lifetime (the data borrowed inside entries).
+
+This avoids the self-referential `&'src Tape<'src>` pattern.
+
+`Tape::root<'t>(&'t self) -> Option<TapeRef<'t, 'src>>` is the entry point.
+
+A private `fn tape_skip(entries, pos) -> usize` advances past one entry in O(1)
+for `StartObject` / `StartArray` (using the pre-baked end-index payload) and
+also O(1) for scalars.
+
+### Implementation
+
+~300-line insertion in `src/lib.rs` between `TapeWriter` impl and `write_atom`:
+
+1. `pub struct TapeRef<'t, 'src: 't>` + `#[derive(Clone, Copy)]`
+2. `impl<'src> Tape<'src> { pub fn root<'t>` }
+3. `fn tape_skip` (private)
+4. `pub trait JsonRef<'a>` with full docstrings
+5. `impl<'a> JsonRef<'a> for &'a Value<'a>`
+6. `impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src>`
+
+### Tests
+
+Six new tests added (29 total): `jsonref_scalars_value/tape`, `jsonref_object_get`,
+`jsonref_array_index`, `jsonref_nested`, `jsonref_generic_fn` (exercises a
+`fn<'a, J: JsonRef<'a>>(J) -> Option<i64>` on both representations).  All pass.
+
+### Commit
+
+```
+9b5f27c  feat: add JsonRef trait + TapeRef cursor
+```

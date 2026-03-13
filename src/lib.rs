@@ -486,6 +486,321 @@ impl<'a> JsonWriter<'a> for TapeWriter<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// JsonRef — read-only view trait, modelled on serde_json::Value's accessors
+// ---------------------------------------------------------------------------
+
+/// A lightweight cursor into a [`Tape`], pointing at a single entry by index.
+///
+/// `'t` is the lifetime of the borrow of the tape; `'src` is the lifetime of
+/// the source JSON bytes (`'src: 't`).  Both lifetimes collapse to the same
+/// `'a` in the common case where you borrow the tape and the source in the
+/// same scope.
+///
+/// Created via [`Tape::root`].  Implements [`JsonRef`] alongside
+/// `&'t Value<'src>`.
+#[derive(Clone, Copy)]
+pub struct TapeRef<'t, 'src: 't> {
+    tape: &'t [TapeEntry<'src>],
+    pos: usize,
+}
+
+impl<'src> Tape<'src> {
+    /// Returns a [`TapeRef`] cursor at the root (entry 0), or `None` if the
+    /// tape is empty.
+    pub fn root<'t>(&'t self) -> Option<TapeRef<'t, 'src>> {
+        if self.entries.is_empty() {
+            None
+        } else {
+            Some(TapeRef {
+                tape: &self.entries,
+                pos: 0,
+            })
+        }
+    }
+}
+
+/// Advance past the entry at `pos`, returning the index of the next sibling.
+///
+/// `StartObject(end)` / `StartArray(end)` jump over the entire subtree.
+fn tape_skip(entries: &[TapeEntry<'_>], pos: usize) -> usize {
+    match &entries[pos] {
+        TapeEntry::StartObject(end) => end + 1,
+        TapeEntry::StartArray(end) => end + 1,
+        _ => pos + 1,
+    }
+}
+
+/// Read-only, tree-like access to a parsed JSON value.
+///
+/// Modelled on `serde_json::Value`'s accessor methods.  The lifetime `'a`
+/// is the string-access lifetime: returned `&'a str` slices are valid for at
+/// least `'a`.
+///
+/// Implemented by:
+/// - `&'a Value<'a>` — borrows a tree [`Value`].
+/// - [`TapeRef<'a, _>`] — lightweight cursor into a flat [`Tape`].
+pub trait JsonRef<'a>: Sized + Copy {
+    // ------------------------------------------------------------------
+    // Type-test helpers (all have default implementations)
+    // ------------------------------------------------------------------
+
+    /// Returns `true` if this value is JSON `null`.
+    fn is_null(self) -> bool {
+        self.as_null().is_some()
+    }
+    /// Returns `true` if this value is a JSON boolean.
+    fn is_bool(self) -> bool {
+        self.as_bool().is_some()
+    }
+    /// Returns `true` if this value is a JSON number.
+    fn is_number(self) -> bool {
+        self.as_number_str().is_some()
+    }
+    /// Returns `true` if this value is a JSON string.
+    fn is_string(self) -> bool {
+        self.as_str().is_some()
+    }
+    /// Returns `true` if this value is a JSON array.
+    fn is_array(self) -> bool;
+    /// Returns `true` if this value is a JSON object.
+    fn is_object(self) -> bool;
+
+    // ------------------------------------------------------------------
+    // Scalar accessors
+    // ------------------------------------------------------------------
+
+    /// Returns `Some(())` if this value is `null`, otherwise `None`.
+    fn as_null(self) -> Option<()>;
+    /// Returns the boolean if this value is a boolean, otherwise `None`.
+    fn as_bool(self) -> Option<bool>;
+    /// Returns the raw number token if this value is a number, otherwise `None`.
+    ///
+    /// The slice always contains valid JSON number syntax.
+    fn as_number_str(self) -> Option<&'a str>;
+    /// Returns the string content if this value is a JSON string, otherwise `None`.
+    fn as_str(self) -> Option<&'a str>;
+
+    /// Parse the number as `i64`.
+    ///
+    /// Returns `None` for non-numbers or when the value is out of range.
+    fn as_i64(self) -> Option<i64> {
+        self.as_number_str()?.parse().ok()
+    }
+    /// Parse the number as `u64`.
+    ///
+    /// Returns `None` for non-numbers or when the value is out of range.
+    fn as_u64(self) -> Option<u64> {
+        self.as_number_str()?.parse().ok()
+    }
+    /// Parse the number as `f64`.
+    ///
+    /// Returns `None` for non-numbers.
+    fn as_f64(self) -> Option<f64> {
+        self.as_number_str()?.parse().ok()
+    }
+
+    // ------------------------------------------------------------------
+    // Collection accessors
+    // ------------------------------------------------------------------
+
+    /// Look up an object member by key.
+    ///
+    /// Returns `None` if this value is not an object or the key is absent.
+    fn get(self, key: &str) -> Option<Self>;
+
+    /// Index into an array by zero-based position.
+    ///
+    /// Returns `None` if this value is not an array or `i` is out of bounds.
+    fn index_at(self, i: usize) -> Option<Self>;
+
+    /// Returns the number of elements (array) or key-value pairs (object).
+    ///
+    /// Returns `None` if this value is neither an array nor an object.
+    fn len(self) -> Option<usize>;
+}
+
+// ---------------------------------------------------------------------------
+// JsonRef impl for &'a Value<'a>
+// ---------------------------------------------------------------------------
+
+impl<'a> JsonRef<'a> for &'a Value<'a> {
+    fn is_array(self) -> bool {
+        matches!(self, Value::Array(_))
+    }
+
+    fn is_object(self) -> bool {
+        matches!(self, Value::Object(_))
+    }
+
+    fn as_null(self) -> Option<()> {
+        matches!(self, Value::Null).then_some(())
+    }
+
+    fn as_bool(self) -> Option<bool> {
+        if let Value::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+
+    fn as_number_str(self) -> Option<&'a str> {
+        if let Value::Number(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    fn as_str(self) -> Option<&'a str> {
+        if let Value::String(s) = self {
+            Some(s.as_ref())
+        } else {
+            None
+        }
+    }
+
+    fn get(self, key: &str) -> Option<Self> {
+        if let Value::Object(pairs) = self {
+            pairs
+                .iter()
+                .find(|(k, _)| k.as_ref() == key)
+                .map(|(_, v)| v)
+        } else {
+            None
+        }
+    }
+
+    fn index_at(self, i: usize) -> Option<Self> {
+        if let Value::Array(items) = self {
+            items.get(i)
+        } else {
+            None
+        }
+    }
+
+    fn len(self) -> Option<usize> {
+        match self {
+            Value::Array(items) => Some(items.len()),
+            Value::Object(pairs) => Some(pairs.len()),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JsonRef impl for TapeRef<'t, 'src>
+// ---------------------------------------------------------------------------
+
+impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
+    fn is_array(self) -> bool {
+        matches!(&self.tape[self.pos], TapeEntry::StartArray(_))
+    }
+
+    fn is_object(self) -> bool {
+        matches!(&self.tape[self.pos], TapeEntry::StartObject(_))
+    }
+
+    fn as_null(self) -> Option<()> {
+        matches!(&self.tape[self.pos], TapeEntry::Null).then_some(())
+    }
+
+    fn as_bool(self) -> Option<bool> {
+        if let TapeEntry::Bool(b) = &self.tape[self.pos] {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+
+    fn as_number_str(self) -> Option<&'t str> {
+        if let TapeEntry::Number(s) = &self.tape[self.pos] {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    fn as_str(self) -> Option<&'t str> {
+        if let TapeEntry::String(s) = &self.tape[self.pos] {
+            Some(s.as_ref())
+        } else {
+            None
+        }
+    }
+
+    fn get(self, key: &str) -> Option<Self> {
+        let end_idx = match &self.tape[self.pos] {
+            TapeEntry::StartObject(e) => *e,
+            _ => return None,
+        };
+        let mut i = self.pos + 1;
+        while i < end_idx {
+            if let TapeEntry::Key(k) = &self.tape[i] {
+                let val_pos = i + 1;
+                if k.as_ref() == key {
+                    return Some(TapeRef {
+                        tape: self.tape,
+                        pos: val_pos,
+                    });
+                }
+                i = tape_skip(self.tape, val_pos);
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
+    fn index_at(self, idx: usize) -> Option<Self> {
+        let end_idx = match &self.tape[self.pos] {
+            TapeEntry::StartArray(e) => *e,
+            _ => return None,
+        };
+        let mut i = self.pos + 1;
+        let mut count = 0usize;
+        while i < end_idx {
+            if count == idx {
+                return Some(TapeRef {
+                    tape: self.tape,
+                    pos: i,
+                });
+            }
+            i = tape_skip(self.tape, i);
+            count += 1;
+        }
+        None
+    }
+
+    fn len(self) -> Option<usize> {
+        match &self.tape[self.pos] {
+            TapeEntry::StartArray(end_idx) => {
+                let end_idx = *end_idx;
+                let mut count = 0usize;
+                let mut i = self.pos + 1;
+                while i < end_idx {
+                    i = tape_skip(self.tape, i);
+                    count += 1;
+                }
+                Some(count)
+            }
+            TapeEntry::StartObject(end_idx) => {
+                let end_idx = *end_idx;
+                let mut count = 0usize;
+                let mut i = self.pos + 1;
+                while i < end_idx {
+                    // entries[i] is Key, entries[i+1] is value
+                    i = tape_skip(self.tape, i + 1);
+                    count += 1;
+                }
+                Some(count)
+            }
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Atom helper — writes a number / bool / null through any JsonWriter
 // ---------------------------------------------------------------------------
 
@@ -1709,5 +2024,169 @@ mod tests {
         } else {
             panic!("expected StartObject at index 1");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // JsonRef tests — exercise the trait on both &Value and TapeRef
+    // -----------------------------------------------------------------------
+
+    fn run_both(src: &'static str) -> (Value<'static>, Tape<'static>) {
+        let v = run(src).unwrap();
+        let t = run_tape(src).unwrap();
+        (v, t)
+    }
+
+    #[test]
+    fn jsonref_scalars_value() {
+        use crate::JsonRef;
+        let (v, _) = run_both("null");
+        assert!((&v).is_null());
+        assert!((&v).as_null().is_some());
+
+        let (v, _) = run_both("true");
+        assert!((&v).is_bool());
+        assert_eq!((&v).as_bool(), Some(true));
+
+        let (v, _) = run_both("false");
+        assert_eq!((&v).as_bool(), Some(false));
+
+        let (v, _) = run_both("42");
+        assert!((&v).is_number());
+        assert_eq!((&v).as_number_str(), Some("42"));
+        assert_eq!((&v).as_i64(), Some(42));
+        assert_eq!((&v).as_u64(), Some(42));
+        assert_eq!((&v).as_f64(), Some(42.0));
+
+        let (v, _) = run_both(r#""hello""#);
+        assert!((&v).is_string());
+        assert_eq!((&v).as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn jsonref_scalars_tape() {
+        use crate::JsonRef;
+        let (_, t) = run_both("null");
+        let r = t.root().unwrap();
+        assert!(r.is_null());
+        assert!(r.as_null().is_some());
+
+        let (_, t) = run_both("true");
+        assert_eq!(t.root().unwrap().as_bool(), Some(true));
+
+        let (_, t) = run_both("false");
+        assert_eq!(t.root().unwrap().as_bool(), Some(false));
+
+        let (_, t) = run_both("42");
+        let r = t.root().unwrap();
+        assert!(r.is_number());
+        assert_eq!(r.as_number_str(), Some("42"));
+        assert_eq!(r.as_i64(), Some(42));
+        assert_eq!(r.as_u64(), Some(42));
+        assert_eq!(r.as_f64(), Some(42.0));
+
+        let (_, t) = run_both(r#""hello""#);
+        assert_eq!(t.root().unwrap().as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn jsonref_object_get() {
+        use crate::JsonRef;
+        let src = r#"{"x":1,"y":"hi","z":true}"#;
+        let (v, t) = run_both(src);
+
+        // &Value
+        let vr = &v;
+        assert!(vr.is_object());
+        assert_eq!(vr.get("x").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(vr.get("y").and_then(|v| v.as_str()), Some("hi"));
+        assert_eq!(vr.get("z").and_then(|v| v.as_bool()), Some(true));
+        assert!(vr.get("missing").is_none());
+        assert_eq!(vr.len(), Some(3));
+
+        // TapeRef
+        let tr = t.root().unwrap();
+        assert!(tr.is_object());
+        assert_eq!(tr.get("x").and_then(|r| r.as_i64()), Some(1));
+        assert_eq!(tr.get("y").and_then(|r| r.as_str()), Some("hi"));
+        assert_eq!(tr.get("z").and_then(|r| r.as_bool()), Some(true));
+        assert!(tr.get("missing").is_none());
+        assert_eq!(tr.len(), Some(3));
+    }
+
+    #[test]
+    fn jsonref_array_index() {
+        use crate::JsonRef;
+        let src = r#"[1,"two",false,null]"#;
+        let (v, t) = run_both(src);
+
+        // &Value
+        let vr = &v;
+        assert!(vr.is_array());
+        assert_eq!(vr.len(), Some(4));
+        assert_eq!(vr.index_at(0).and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(vr.index_at(1).and_then(|v| v.as_str()), Some("two"));
+        assert_eq!(vr.index_at(2).and_then(|v| v.as_bool()), Some(false));
+        assert!(vr.index_at(3).unwrap().is_null());
+        assert!(vr.index_at(4).is_none());
+
+        // TapeRef
+        let tr = t.root().unwrap();
+        assert!(tr.is_array());
+        assert_eq!(tr.len(), Some(4));
+        assert_eq!(tr.index_at(0).and_then(|r| r.as_i64()), Some(1));
+        assert_eq!(tr.index_at(1).and_then(|r| r.as_str()), Some("two"));
+        assert_eq!(tr.index_at(2).and_then(|r| r.as_bool()), Some(false));
+        assert!(tr.index_at(3).unwrap().is_null());
+        assert!(tr.index_at(4).is_none());
+    }
+
+    #[test]
+    fn jsonref_nested() {
+        use crate::JsonRef;
+        let src = r#"{"items":[10,20,30],"meta":{"count":3}}"#;
+        let (v, t) = run_both(src);
+
+        // &Value path: v["items"][1] == 20
+        let vr = &v;
+        assert_eq!(
+            vr.get("items")
+                .and_then(|a| a.index_at(1))
+                .and_then(|n| n.as_i64()),
+            Some(20)
+        );
+        assert_eq!(
+            vr.get("meta")
+                .and_then(|o| o.get("count"))
+                .and_then(|n| n.as_i64()),
+            Some(3)
+        );
+
+        // TapeRef same paths
+        let tr = t.root().unwrap();
+        assert_eq!(
+            tr.get("items")
+                .and_then(|a| a.index_at(1))
+                .and_then(|n| n.as_i64()),
+            Some(20)
+        );
+        assert_eq!(
+            tr.get("meta")
+                .and_then(|o| o.get("count"))
+                .and_then(|n| n.as_i64()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn jsonref_generic_fn() {
+        // Verify a generic function works over both representations.
+        use crate::JsonRef;
+        fn first_item<'a, J: JsonRef<'a>>(val: J) -> Option<i64> {
+            val.index_at(0)?.as_i64()
+        }
+        let src = "[7,8,9]";
+        let (v, t) = run_both(src);
+        assert_eq!(first_item(&v), Some(7));
+        assert_eq!(first_item(t.root().unwrap()), Some(7));
     }
 }
