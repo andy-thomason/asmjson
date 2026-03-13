@@ -205,6 +205,9 @@ fn bench_string_object(c: &mut Criterion) {
     group.bench_function("asmjson/zmm", |b| {
         b.iter(|| std::hint::black_box(parse_json(&data, classify_zmm)));
     });
+    group.bench_function("asmjson/zmm/tape", |b| {
+        b.iter(|| std::hint::black_box(parse_to_tape(&data, classify_zmm)));
+    });
     group.bench_with_input(
         BenchmarkId::new("simd-json", "borrowed"),
         &data.as_bytes().to_vec(),

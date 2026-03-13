@@ -239,3 +239,43 @@ reasonable.  The same pattern can be replicated for `string_object` and
 ```
 3b1f4b2  bench: add asmjson/zmm/tape to string_array group
 ```
+---
+
+## Session 4 — string_object Tape benchmark
+
+### What was done
+
+Added an `asmjson/zmm/tape` slot to the `string_object` criterion group to
+compare `parse_json` (Value tree) vs `parse_to_tape` (flat Tape) on the
+object-heavy workload.
+
+### Results
+
+Workload: ~10 MiB flat JSON object with string keys (`"keyNNNNN"`) and
+85-character ASCII string values.
+
+| variant | throughput |
+|---|---|
+| `asmjson/zmm` — `parse_json` → `Value` tree | 5.29 GiB/s |
+| `asmjson/zmm/tape` — `parse_to_tape` → `Tape` | 5.53 GiB/s |
+
+Only **~5% faster**, compared to 37% on the string array.
+
+### Design decisions / analysis
+
+The much smaller gain reflects the structure of the workload.  Each object
+member requires a key parse (KeyChars → KeyEnd → AfterColon states) that is
+identical in both paths — the Tape still emits a `Key` entry for every member.
+On the Value side, the `Vec<(Cow, Value)>` members accumulation is the main
+allocation cost; on the Tape side that is replaced by a flat `Vec<TapeEntry>`
+push, but the state-machine work per byte is the same.
+
+In contrast, the string array workload allocates a `Box<[Value]>` per
+top-level array (containing ~100 k `Value::String` variants), which the Tape
+eliminates entirely.
+
+### Commit
+
+```
+c1fb9d4  bench: add asmjson/zmm/tape to string_object group
+```
