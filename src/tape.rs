@@ -162,6 +162,128 @@ pub(crate) fn tape_skip(entries: &[TapeEntry<'_>], pos: usize) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// TapeObjectIter / TapeArrayIter
+// ---------------------------------------------------------------------------
+
+/// Iterator over the key-value pairs of a JSON object in a [`Tape`].
+///
+/// Yields `(&str, TapeRef)` pairs in document order.  Created by
+/// [`TapeRef::object_iter`].
+pub struct TapeObjectIter<'t, 'src: 't> {
+    tape: &'t [TapeEntry<'src>],
+    pos: usize,
+    end: usize,
+}
+
+impl<'t, 'src: 't> Iterator for TapeObjectIter<'t, 'src> {
+    type Item = (&'t str, TapeRef<'t, 'src>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.end {
+            return None;
+        }
+        if let TapeEntry::Key(k) = &self.tape[self.pos] {
+            let key: &'t str = k.as_ref();
+            let val_pos = self.pos + 1;
+            self.pos = tape_skip(self.tape, val_pos);
+            Some((
+                key,
+                TapeRef {
+                    tape: self.tape,
+                    pos: val_pos,
+                },
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+/// Iterator over the elements of a JSON array in a [`Tape`].
+///
+/// Yields one [`TapeRef`] per element in document order.  Created by
+/// [`TapeRef::array_iter`].
+pub struct TapeArrayIter<'t, 'src: 't> {
+    tape: &'t [TapeEntry<'src>],
+    pos: usize,
+    end: usize,
+}
+
+impl<'t, 'src: 't> Iterator for TapeArrayIter<'t, 'src> {
+    type Item = TapeRef<'t, 'src>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.end {
+            return None;
+        }
+        let item = TapeRef {
+            tape: self.tape,
+            pos: self.pos,
+        };
+        self.pos = tape_skip(self.tape, self.pos);
+        Some(item)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TapeRef inherent methods
+// ---------------------------------------------------------------------------
+
+impl<'t, 'src: 't> TapeRef<'t, 'src> {
+    /// Returns an iterator over the key-value pairs if this value is a JSON
+    /// object, or `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use asmjson::{parse_to_tape, choose_classifier, JsonRef};
+    ///
+    /// let tape = parse_to_tape(r#"{"a":1,"b":2}"#, choose_classifier()).unwrap();
+    /// let root = tape.root().unwrap();
+    /// for (key, val) in root.object_iter().unwrap() {
+    ///     println!("{key}: {}", val.as_number_str().unwrap());
+    /// }
+    /// ```
+    pub fn object_iter(self) -> Option<TapeObjectIter<'t, 'src>> {
+        if let TapeEntry::StartObject(end) = self.tape[self.pos] {
+            Some(TapeObjectIter {
+                tape: self.tape,
+                pos: self.pos + 1,
+                end,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Returns an iterator over the elements if this value is a JSON array,
+    /// or `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use asmjson::{parse_to_tape, choose_classifier, JsonRef};
+    ///
+    /// let tape = parse_to_tape(r#"[1,2,3]"#, choose_classifier()).unwrap();
+    /// let root = tape.root().unwrap();
+    /// for elem in root.array_iter().unwrap() {
+    ///     println!("{}", elem.as_number_str().unwrap());
+    /// }
+    /// ```
+    pub fn array_iter(self) -> Option<TapeArrayIter<'t, 'src>> {
+        if let TapeEntry::StartArray(end) = self.tape[self.pos] {
+            Some(TapeArrayIter {
+                tape: self.tape,
+                pos: self.pos + 1,
+                end,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -169,7 +291,7 @@ pub(crate) fn tape_skip(entries: &[TapeEntry<'_>], pos: usize) -> usize {
 mod tests {
     use std::borrow::Cow;
 
-    use crate::{choose_classifier, classify_u64, classify_ymm, parse_to_tape};
+    use crate::{JsonRef, choose_classifier, classify_u64, classify_ymm, parse_to_tape};
 
     use super::{Tape, TapeEntry};
 
@@ -331,5 +453,47 @@ mod tests {
         } else {
             panic!("expected StartObject at index 1");
         }
+    }
+
+    #[test]
+    fn tape_object_iter() {
+        let t = run_tape(r#"{"x":1,"y":true,"z":"hi"}"#).unwrap();
+        let root = t.root().unwrap();
+        let pairs: Vec<_> = root
+            .object_iter()
+            .expect("should be object")
+            .map(|(k, v)| (k.to_string(), (v.as_number_str(), v.as_bool(), v.as_str())))
+            .collect();
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(pairs[0].0, "x");
+        assert_eq!(pairs[0].1, (Some("1"), None, None));
+        assert_eq!(pairs[1].0, "y");
+        assert_eq!(pairs[1].1, (None, Some(true), None));
+        assert_eq!(pairs[2].0, "z");
+        assert_eq!(pairs[2].1, (None, None, Some("hi")));
+        // Non-object returns None.
+        let at = parse_to_tape("[1]", classify_u64).unwrap();
+        assert!(at.root().unwrap().object_iter().is_none());
+    }
+
+    #[test]
+    fn tape_array_iter() {
+        let t = run_tape(r#"[1,"two",false,null]"#).unwrap();
+        let root = t.root().unwrap();
+        let items: Vec<_> = root.array_iter().expect("should be array").collect();
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0].as_number_str(), Some("1"));
+        assert_eq!(items[1].as_str(), Some("two"));
+        assert_eq!(items[2].as_bool(), Some(false));
+        assert!(items[3].is_null());
+        // Nested structures count as single elements.
+        let nt = run_tape(r#"[[1,2],{"a":3}]"#).unwrap();
+        let nelems: Vec<_> = nt.root().unwrap().array_iter().unwrap().collect();
+        assert_eq!(nelems.len(), 2);
+        assert!(nelems[0].is_array());
+        assert!(nelems[1].is_object());
+        // Non-array returns None.
+        let ot = parse_to_tape(r#"{"a":1}"#, classify_u64).unwrap();
+        assert!(ot.root().unwrap().array_iter().is_none());
     }
 }

@@ -7,7 +7,7 @@ pub mod tape;
 pub mod value;
 
 pub use json_ref::JsonRef;
-pub use tape::{Tape, TapeEntry, TapeRef};
+pub use tape::{Tape, TapeArrayIter, TapeEntry, TapeObjectIter, TapeRef};
 pub use value::Value;
 
 use tape::TapeWriter;
