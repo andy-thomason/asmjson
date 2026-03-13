@@ -4,8 +4,47 @@ use asmjson::choose_classifier;
 use asmjson::parse_json;
 #[cfg(feature = "stats")]
 use asmjson::stats;
-use asmjson::{classify_zmm, parse_to_tape};
+use asmjson::{TapeEntry, classify_zmm, parse_to_tape};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+
+// ---------------------------------------------------------------------------
+// Post-parse traversal helpers
+// ---------------------------------------------------------------------------
+
+/// Sum the lengths of every String and Key entry in a tape.
+#[inline]
+fn tape_sum_lens(tape: &asmjson::Tape<'_>) -> usize {
+    tape.entries
+        .iter()
+        .map(|e| match e {
+            TapeEntry::String(s) => s.len(),
+            TapeEntry::Key(k) => k.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Recursively sum the lengths of every string value and object key in a
+/// sonic-rs Value tree.
+fn sonic_sum_lens(v: &sonic_rs::Value) -> usize {
+    use sonic_rs::{JsonContainerTrait, JsonValueTrait};
+    if let Some(s) = v.as_str() {
+        return s.len();
+    }
+    if let Some(obj) = v.as_object() {
+        return obj
+            .iter()
+            .map(|(k, val): (&str, &sonic_rs::Value)| k.len() + sonic_sum_lens(val))
+            .sum();
+    }
+    if let Some(arr) = v.as_array() {
+        return arr
+            .iter()
+            .map(|val: &sonic_rs::Value| sonic_sum_lens(val))
+            .sum();
+    }
+    0
+}
 
 // ---------------------------------------------------------------------------
 // Stats helper — compiled in only with --features stats
@@ -164,7 +203,10 @@ fn bench_string_array(c: &mut Criterion) {
     let mut group = c.benchmark_group("string_array");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("asmjson/zmm/tape", |b| {
-        b.iter(|| std::hint::black_box(parse_to_tape(&data, classify_zmm)));
+        b.iter(|| {
+            let tape = parse_to_tape(&data, classify_zmm).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
     });
     // group.bench_with_input(
     //     BenchmarkId::new("simd-json", "borrowed"),
@@ -184,7 +226,10 @@ fn bench_string_array(c: &mut Criterion) {
     //     b.iter(|| std::hint::black_box(serde_json::from_str::<serde_json::Value>(&data).unwrap()));
     // });
     group.bench_function("sonic-rs", |b| {
-        b.iter(|| std::hint::black_box(sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap()));
+        b.iter(|| {
+            let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
+            std::hint::black_box(sonic_sum_lens(&v))
+        });
     });
     group.finish();
 }
@@ -196,7 +241,10 @@ fn bench_string_object(c: &mut Criterion) {
     let mut group = c.benchmark_group("string_object");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("asmjson/zmm/tape", |b| {
-        b.iter(|| std::hint::black_box(parse_to_tape(&data, classify_zmm)));
+        b.iter(|| {
+            let tape = parse_to_tape(&data, classify_zmm).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
     });
     // group.bench_with_input(
     //     BenchmarkId::new("simd-json", "borrowed"),
@@ -216,7 +264,10 @@ fn bench_string_object(c: &mut Criterion) {
     //     b.iter(|| std::hint::black_box(serde_json::from_str::<serde_json::Value>(&data).unwrap()));
     // });
     group.bench_function("sonic-rs", |b| {
-        b.iter(|| std::hint::black_box(sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap()));
+        b.iter(|| {
+            let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
+            std::hint::black_box(sonic_sum_lens(&v))
+        });
     });
     group.finish();
 }
@@ -228,7 +279,10 @@ fn bench_mixed(c: &mut Criterion) {
     let mut group = c.benchmark_group("mixed");
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("asmjson/zmm/tape", |b| {
-        b.iter(|| std::hint::black_box(parse_to_tape(&data, classify_zmm)));
+        b.iter(|| {
+            let tape = parse_to_tape(&data, classify_zmm).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
     });
     // let bytes = data.as_bytes().to_vec();
     // group.bench_with_input(
@@ -249,7 +303,10 @@ fn bench_mixed(c: &mut Criterion) {
     //     b.iter(|| std::hint::black_box(serde_json::from_str::<serde_json::Value>(&data).unwrap()));
     // });
     group.bench_function("sonic-rs", |b| {
-        b.iter(|| std::hint::black_box(sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap()));
+        b.iter(|| {
+            let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
+            std::hint::black_box(sonic_sum_lens(&v))
+        });
     });
     group.finish();
 }
