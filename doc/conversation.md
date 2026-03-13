@@ -484,3 +484,66 @@ three unused imports that surfaced during the move.
 ### Commit
 
 `4781b13` refactor: split into submodules value, tape, json_ref
+
+## Session 9 — portable SWAR classifier
+
+### Add `classify_u64`
+
+#### What was done
+
+Added `pub fn classify_u64(src: &[u8]) -> ByteState`, a pure-Rust classifier
+that processes a 64-byte block as eight `u64` words using SIMD-Within-A-Register
+(SWAR) tricks, requiring no architecture-specific intrinsics.
+
+`choose_classifier()` was updated so that `classify_u64` is the universal
+fallback returned when not running on x86-64 (which continues to return the
+AVX-512 / AVX2 / SSE2 path as before).
+
+The `classifier_agreement` integration test was extended to assert that
+`classify_u64` produces the same `ByteState` as `classify_zmm` for every
+test input.  `classify_u64` was also added as `asmjson/u64` to all three
+benchmark groups in `benches/parse.rs`.
+
+#### Design decisions
+
+**Whitespace detection** (`byte <= 0x20`):
+
+```
+masked = v & 0x7f7f_7f7f_7f7f_7f7f  // clear bit 7 before add
+sum    = masked + 0x5f5f_5f5f_5f5f_5f5f  // overflows into bit 7 iff byte >= 0x21
+w      = !(sum | v) & 0x8080_8080_8080_8080
+```
+
+Masking bit 7 before the add prevents bytes ≥ 0x80 from aliasing into the
+target range.  OR-ing the original `v` then ensures bytes ≥ 0x80 are excluded
+from the final result.
+
+**Byte equality** — XOR with a broadcast constant turns the problem into
+"detect a zero byte":
+
+```
+has_zero_byte(v) = (v - 0x0101...) & !v & 0x8080...
+eq_byte(v, b)    = has_zero_byte(v ^ (b * 0x0101...))
+```
+
+**Movemask** — collects the MSB of each byte into a `u8`:
+
+```
+((v & 0x8080...) * 0x0002_0408_1020_4081) >> 56
+```
+
+The magic multiplier routes bit 7 of byte *k* (at position `8k+7`) into
+bit `56+k` of the product; shifting right 56 leaves the eight flags in the
+low byte.
+
+**Zero-padding** — bytes beyond `src.len()` are zero-filled, which the
+whitespace test classifies as whitespace — consistent with the behaviour of
+the SIMD classifiers.
+
+#### Results
+
+30/30 tests pass; zero warnings.  `cargo bench --no-run` compiles cleanly.
+
+#### Commit
+
+`54979e0` feat: add classify_u64 portable SWAR classifier
