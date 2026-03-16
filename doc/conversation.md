@@ -1439,3 +1439,70 @@ No further action taken; existing `mov` stores are optimal for the benchmark
 profile.
 
 **Commits**: `e9bf4e1` NT stores (then `0673d7d` revert)
+---
+
+## Session 13 — promote hot stack slots to live registers r8/r9
+
+### Motivation
+
+The perf profile from session 12 highlighted two stack-slot loads as the
+highest-weight individual instructions:
+
+| LOC slot        | sample weight |
+|-----------------|---------------|
+| LOC_CHUNK_LEN   | 6.18 %        |
+| LOC_POS         | 5.20 %        |
+
+Both are read on every iteration of the inner dispatch loop (chunk_offset
+advance, `cmp rcx, chunk_len`, `lea rdx, [r12 + pos]`).
+
+### Design decisions
+
+**Register selection**: After the prologue, `r8` (which carried `frames_buf`
+in the calling convention) is moved to `r15`, and `r9` (which carried
+`open_buf`) is spilled to `LOC_OPEN_BUF`.  Both `r8` and `r9` are therefore
+free as caller-saved scratch registers for the rest of the function.
+
+| Register | Live value   | Stack spill home |
+|----------|-------------|-----------------|
+| `r8`     | chunk\_len  | `LOC_CHUNK_LEN` |
+| `r9`     | pos         | `LOC_POS`       |
+
+**Spill sites**: External calls (`unescape_str`, `tape_take_box_str`,
+`is_valid_json_number_c`) are caller-saved clobbers, so r8/r9 must be
+saved to their stack homes before each call cluster and restored afterward.
+These paths are hit only for escaped strings/keys and numbers that fail the
+fast SWAR path — all are rare in typical JSON.
+
+**zmm\_space pointer conflict**: The `.Lclassify_do` block previously used
+`r9` as a scratch pointer to the `.Lzmm_space` lookup table.  Moved to `rdi`
+(safe because no calls occur in `chunk_fetch`).
+
+**Prologue init**: Changed `mov qword ptr [rbp + LOC_POS], rax` →
+`xor r9d, r9d` and `mov qword ptr [rbp + LOC_CHUNK_LEN], rax` →
+`xor r8d, r8d`.
+
+**chunk\_fetch advance**: Collapsed the old three-instruction sequence
+```
+mov rax, [rbp + LOC_CHUNK_LEN]
+add [rbp + LOC_POS], rax
+mov rax, [rbp + LOC_POS]           ; → r9 after sed
+lea rdx, [r12 + rax]
+```
+into two instructions:
+```
+add r9, r8                          ; pos += chunk_len
+lea rdx, [r12 + r9]                 ; chunk_ptr
+```
+
+### Results
+
+```
+mixed/asmjson/zmm_tape     −5.3 %  time   (+5.6 % throughput)  vs previous baseline
+string_array/asmjson/zmm_tape  −1.7 %  time
+string_object/asmjson/zmm_tape  −0.7 %  time  (within noise)
+```
+
+All 27 unit tests and 6 doc-tests pass.
+
+**Commit**: `bc7891b` perf: promote LOC_CHUNK_LEN and LOC_POS to live registers r8/r9
