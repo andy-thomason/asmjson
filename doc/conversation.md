@@ -1506,3 +1506,49 @@ string_object/asmjson/zmm_tape  −0.7 %  time  (within noise)
 All 27 unit tests and 6 doc-tests pass.
 
 **Commit**: `bc7891b` perf: promote LOC_CHUNK_LEN and LOC_POS to live registers r8/r9
+## Session 17 — TapeOverflow error code with capacity-doubling retry
+
+### What was done
+
+Changed `parse_json_zmm_tape` from returning a `bool` (`1`=ok, `0`=error) to
+returning a `u8` error code:
+
+| Constant            | Value | Meaning                             |
+|---------------------|-------|-------------------------------------|
+| `RESULT_OK`         | `0`   | Parse succeeded                     |
+| `RESULT_PARSE_ERROR`| `1`   | Invalid JSON                        |
+| `RESULT_TAPE_OVERFLOW`| `2` | Tape buffer was too small           |
+
+The Rust wrapper `parse_to_tape_zmm_tape` now starts with a conservative tape
+capacity of `(src.len() / 4).max(2)` and doubles on every `RESULT_TAPE_OVERFLOW`
+response until the parse succeeds.
+
+### Design decisions
+
+**Capacity checks in assembly**: A `cmp rbx, qword ptr [rbp + LOC_TAPE_CAP]`
+/ `jae .Ltape_overflow` pair was inserted before every tape write site — 16
+sites in total. The tape capacity is passed as a 9th stack argument (`LOC_TAPE_CAP = +32`).
+
+**`.Lemit_atom` strategy**: `.Lemit_atom` uses `al=1/0` as an internal success
+flag. Inserting a third return value there would have broken all callers that
+use `test al, al; jz .Lerror`. Capacity checks were placed at the two *call
+sites* instead (`.Latom_chars` and `.Latom_eof_flush`), leaving `.Lemit_atom`
+internals unchanged.
+
+**Memory safety on overflow**: Any `EscapedString`/`EscapedKey` entries already
+written to the tape own `Box<str>` data. If the Vec is dropped with `len=0`,
+those allocations leak. The `.Ltape_overflow` path first writes the partial
+`rbx` (number of valid entries) to `*tape_len_out`, then returns `2`. The Rust
+`RESULT_TAPE_OVERFLOW` arm calls `unsafe { tape_data.set_len(tape_len) }` so
+the Vec correctly drops those entries before growing and retrying.
+
+**Initial capacity**: `(src.len() / 4).max(2)` is intentionally small so the
+retry path is exercised even on moderately sized inputs.
+
+### Results
+
+28 unit tests and 6 doc-tests pass. The new test `zmm_tape_overflow_retry`
+builds a 200-element JSON array (~800+ tape entries), verifying that the
+capacity-doubling retry produces the correct result.
+
+**Commit**: `6c87ff4` feat: TapeOverflow error code with capacity-doubling retry
