@@ -40,70 +40,158 @@ struct ZmmVtab {
     end_array: unsafe extern "C" fn(*mut ()),
 }
 
-/// Trampoline functions from the C calling convention into TapeWriter.
-///
-/// The `data` pointer always points to a live `TapeWriter<'a>`.  We use
-/// `'static` to satisfy the extern-"C" no-lifetime signature; safety is
-/// upheld by the caller (`parse_to_tape_zmm_dyn`) guaranteeing that the
-/// writer and source JSON both outlive the assembly call.
+// ---------------------------------------------------------------------------
+// Generic C-ABI trampolines for any JsonWriter
+// ---------------------------------------------------------------------------
+//
+// `WriterForZmm` is a private bridge trait that exposes every `JsonWriter`
+// method via raw pointer / length pairs so that the `extern "C"` trampolines
+// below need no lifetime parameters.  It is implemented for every
+// `W: JsonWriter<'a>` via the blanket impl; the `transmute` in each `src_*`
+// method is sound because the raw pointers always point into the source JSON
+// which lives for at least `'a`, matching the lifetime the concrete writer
+// expects.
+
 #[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_null(data: *mut ()) {
-    unsafe { (*(data as *mut TapeWriter<'static>)).null() }
+pub(crate) trait WriterForZmm {
+    unsafe fn wfz_null(&mut self);
+    unsafe fn wfz_bool_val(&mut self, v: bool);
+    unsafe fn wfz_number(&mut self, ptr: *const u8, len: usize);
+    unsafe fn wfz_string(&mut self, ptr: *const u8, len: usize);
+    unsafe fn wfz_escaped_string(&mut self, s: Box<str>);
+    unsafe fn wfz_key(&mut self, ptr: *const u8, len: usize);
+    unsafe fn wfz_escaped_key(&mut self, s: Box<str>);
+    unsafe fn wfz_start_object(&mut self);
+    unsafe fn wfz_end_object(&mut self);
+    unsafe fn wfz_start_array(&mut self);
+    unsafe fn wfz_end_array(&mut self);
+}
+
+#[cfg(target_arch = "x86_64")]
+impl<'a, W: JsonWriter<'a>> WriterForZmm for W {
+    unsafe fn wfz_null(&mut self) {
+        self.null()
+    }
+    unsafe fn wfz_bool_val(&mut self, v: bool) {
+        self.bool_val(v)
+    }
+    unsafe fn wfz_number(&mut self, ptr: *const u8, len: usize) {
+        let s: &'a str = unsafe {
+            std::mem::transmute(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                ptr, len,
+            )))
+        };
+        self.number(s)
+    }
+    unsafe fn wfz_string(&mut self, ptr: *const u8, len: usize) {
+        let s: &'a str = unsafe {
+            std::mem::transmute(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                ptr, len,
+            )))
+        };
+        self.string(s)
+    }
+    unsafe fn wfz_escaped_string(&mut self, s: Box<str>) {
+        self.escaped_string(s)
+    }
+    unsafe fn wfz_key(&mut self, ptr: *const u8, len: usize) {
+        let s: &'a str = unsafe {
+            std::mem::transmute(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                ptr, len,
+            )))
+        };
+        self.key(s)
+    }
+    unsafe fn wfz_escaped_key(&mut self, s: Box<str>) {
+        self.escaped_key(s)
+    }
+    unsafe fn wfz_start_object(&mut self) {
+        self.start_object()
+    }
+    unsafe fn wfz_end_object(&mut self) {
+        self.end_object()
+    }
+    unsafe fn wfz_start_array(&mut self) {
+        self.start_array()
+    }
+    unsafe fn wfz_end_array(&mut self) {
+        self.end_array()
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn zw_null<W: WriterForZmm>(data: *mut ()) {
+    unsafe { (*(data as *mut W)).wfz_null() }
 }
 #[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_bool_val(data: *mut (), v: bool) {
-    unsafe { (*(data as *mut TapeWriter<'static>)).bool_val(v) }
+unsafe extern "C" fn zw_bool_val<W: WriterForZmm>(data: *mut (), v: bool) {
+    unsafe { (*(data as *mut W)).wfz_bool_val(v) }
 }
 #[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_number(data: *mut (), ptr: *const u8, len: usize) {
+unsafe extern "C" fn zw_number<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
+    unsafe { (*(data as *mut W)).wfz_number(ptr, len) }
+}
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn zw_string<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
+    unsafe { (*(data as *mut W)).wfz_string(ptr, len) }
+}
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn zw_escaped_string<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
     unsafe {
-        let s: &'static str = std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len));
-        (*(data as *mut TapeWriter<'static>)).number(s)
+        let s = Box::from(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+            ptr, len,
+        )));
+        (*(data as *mut W)).wfz_escaped_string(s)
     }
 }
 #[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_string(data: *mut (), ptr: *const u8, len: usize) {
+unsafe extern "C" fn zw_key<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
+    unsafe { (*(data as *mut W)).wfz_key(ptr, len) }
+}
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn zw_escaped_key<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
     unsafe {
-        let s: &'static str = std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len));
-        (*(data as *mut TapeWriter<'static>)).string(s)
+        let s = Box::from(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+            ptr, len,
+        )));
+        (*(data as *mut W)).wfz_escaped_key(s)
     }
 }
 #[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_escaped_string(data: *mut (), ptr: *const u8, len: usize) {
-    unsafe {
-        let s = std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len));
-        (*(data as *mut TapeWriter<'static>)).escaped_string(Box::from(s))
+unsafe extern "C" fn zw_start_object<W: WriterForZmm>(data: *mut ()) {
+    unsafe { (*(data as *mut W)).wfz_start_object() }
+}
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn zw_end_object<W: WriterForZmm>(data: *mut ()) {
+    unsafe { (*(data as *mut W)).wfz_end_object() }
+}
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn zw_start_array<W: WriterForZmm>(data: *mut ()) {
+    unsafe { (*(data as *mut W)).wfz_start_array() }
+}
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" fn zw_end_array<W: WriterForZmm>(data: *mut ()) {
+    unsafe { (*(data as *mut W)).wfz_end_array() }
+}
+
+/// Build a [`ZmmVtab`] whose function pointers are monomorphised for writer
+/// type `W`.  `W` must implement [`WriterForZmm`], which is blanket-impl'd
+/// for every `JsonWriter<'a>`.
+#[cfg(target_arch = "x86_64")]
+fn build_zmm_vtab<W: WriterForZmm>() -> ZmmVtab {
+    ZmmVtab {
+        null: zw_null::<W>,
+        bool_val: zw_bool_val::<W>,
+        number: zw_number::<W>,
+        string: zw_string::<W>,
+        escaped_string: zw_escaped_string::<W>,
+        key: zw_key::<W>,
+        escaped_key: zw_escaped_key::<W>,
+        start_object: zw_start_object::<W>,
+        end_object: zw_end_object::<W>,
+        start_array: zw_start_array::<W>,
+        end_array: zw_end_array::<W>,
     }
-}
-#[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_key(data: *mut (), ptr: *const u8, len: usize) {
-    unsafe {
-        let s: &'static str = std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len));
-        (*(data as *mut TapeWriter<'static>)).key(s)
-    }
-}
-#[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_escaped_key(data: *mut (), ptr: *const u8, len: usize) {
-    unsafe {
-        let s = std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len));
-        (*(data as *mut TapeWriter<'static>)).escaped_key(Box::from(s))
-    }
-}
-#[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_start_object(data: *mut ()) {
-    unsafe { (*(data as *mut TapeWriter<'static>)).start_object() }
-}
-#[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_end_object(data: *mut ()) {
-    unsafe { (*(data as *mut TapeWriter<'static>)).end_object() }
-}
-#[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_start_array(data: *mut ()) {
-    unsafe { (*(data as *mut TapeWriter<'static>)).start_array() }
-}
-#[cfg(target_arch = "x86_64")]
-unsafe extern "C" fn tw_end_array(data: *mut ()) {
-    unsafe { (*(data as *mut TapeWriter<'static>)).end_array() }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -474,23 +562,7 @@ pub fn parse_to_tape_zmm_dyn<'a>(src: &'a str) -> Option<Tape<'a>> {
     let mut writer = TapeWriter::new();
     let mut frames_buf = [FrameKind::Object; MAX_JSON_DEPTH];
     let mut unescape_buf = String::new();
-
-    // Build the stable C-layout vtable on the stack.  The assembly indexes
-    // into this with fixed byte offsets (0, 8, 16, …) — no unstable Rust
-    // dyn-vtable layout needed.
-    let vtab = ZmmVtab {
-        null: tw_null,
-        bool_val: tw_bool_val,
-        number: tw_number,
-        string: tw_string,
-        escaped_string: tw_escaped_string,
-        key: tw_key,
-        escaped_key: tw_escaped_key,
-        start_object: tw_start_object,
-        end_object: tw_end_object,
-        start_array: tw_start_array,
-        end_array: tw_end_array,
-    };
+    let vtab = build_zmm_vtab::<TapeWriter<'a>>();
 
     // SAFETY:
     //   • `writer` is alive for the entire assembly call and is the only
@@ -626,11 +698,48 @@ pub fn parse_to_tape_zmm_tape<'a>(
 ///
 /// This is the generic entry point: supply your own writer to produce any
 /// output in a single pass over the source.
+///
+/// When `classify` is [`classify_zmm`], the CPU supports AVX-512BW, the
+/// source is a JSON object or array (first non-whitespace byte is `{` or
+/// `[`), and the source contains no backslash escape sequences, the
+/// hand-written assembly parser ([`parse_to_tape_zmm_dyn`]) is used
+/// automatically instead of the Rust state machine.  All other inputs fall
+/// back to the Rust path, which handles every valid JSON value.
 pub fn parse_with<'a, W: JsonWriter<'a>>(
     src: &'a str,
     classify: ClassifyFn,
-    writer: W,
+    mut writer: W,
 ) -> Option<W::Output> {
+    #[cfg(target_arch = "x86_64")]
+    if classify == classify_zmm
+        && std::is_x86_feature_detected!("avx512bw")
+        && !src.contains('\\')
+        && src
+            .as_bytes()
+            .iter()
+            .find(|&&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n'))
+            .map_or(false, |&b| b == b'{' || b == b'[')
+    {
+        let vtab = build_zmm_vtab::<W>();
+        let mut frames_buf = [FrameKind::Object; MAX_JSON_DEPTH];
+        let mut unescape_buf = String::new();
+        // SAFETY: identical invariants to parse_to_tape_zmm_dyn — writer and
+        // src both live for 'a which outlasts the synchronous assembly call.
+        // The guards above ensure no escaped_string / escaped_key callbacks
+        // are issued, and that the input begins with an object or array as
+        // the assembly parser requires.
+        let ok = unsafe {
+            parse_json_zmm_dyn(
+                src.as_ptr(),
+                src.len(),
+                &raw mut writer as *mut (),
+                &vtab,
+                frames_buf.as_mut_ptr() as *mut u8,
+                &raw mut unescape_buf,
+            )
+        };
+        return if ok { writer.finish() } else { None };
+    }
     let mut frames_buf = [FrameKind::Object; MAX_JSON_DEPTH];
     let mut unescape_buf = String::new();
     parse_json_impl(src, classify, writer, &mut frames_buf, &mut unescape_buf)
