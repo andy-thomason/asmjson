@@ -1,8 +1,8 @@
-//! Serde `Deserializer` implementation for [`TapeRef`].
+//! Serde `Deserializer` implementation for [`DomRef`].
 //!
 //! Enabled with the `serde` feature flag.
 
-use crate::dom::{TapeArrayIter, TapeEntryKind, TapeObjectIter, TapeRef};
+use crate::dom::{DomArrayIter, DomEntryKind, DomObjectIter, DomRef};
 use serde::Deserialize;
 use serde::de::{self, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
 use std::fmt;
@@ -30,21 +30,21 @@ impl de::Error for Error {
 }
 
 // ---------------------------------------------------------------------------
-// Deserializer for TapeRef<'de, 'de>
+// Deserializer for DomRef<'de, 'de>
 //
 // Both tape-borrow and source-JSON lifetimes are collapsed to a single `'de`.
 // This is the common case when the tape and source both outlive the
 // deserialization scope, and it is what `from_taperef` enforces.
 // ---------------------------------------------------------------------------
 
-impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
+impl<'de> de::Deserializer<'de> for DomRef<'de, 'de> {
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         match self.tape[self.pos].kind() {
-            TapeEntryKind::Null => visitor.visit_unit(),
-            TapeEntryKind::Bool => visitor.visit_bool(self.tape[self.pos].payload() != 0),
-            TapeEntryKind::Number => {
+            DomEntryKind::Null => visitor.visit_unit(),
+            DomEntryKind::Bool => visitor.visit_bool(self.tape[self.pos].payload() != 0),
+            DomEntryKind::Number => {
                 let s = self.tape[self.pos].as_number().unwrap();
                 // Probe integer types before falling back to float.
                 if let Ok(v) = s.parse::<u64>() {
@@ -58,23 +58,23 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
                 }
                 visitor.visit_str(s)
             }
-            TapeEntryKind::String => {
+            DomEntryKind::String => {
                 // Zero-copy: borrow directly from the source JSON.
                 let s: &'de str = self.tape[self.pos].source_string().unwrap();
                 visitor.visit_borrowed_str(s)
             }
-            TapeEntryKind::EscapedString => {
+            DomEntryKind::EscapedString => {
                 visitor.visit_str(self.tape[self.pos].as_string().unwrap())
             }
-            TapeEntryKind::StartObject => visitor.visit_map(TapeMapAccess::new(self)),
-            TapeEntryKind::StartArray => visitor.visit_seq(TapeSeqAccess::new(self)),
+            DomEntryKind::StartObject => visitor.visit_map(TapeMapAccess::new(self)),
+            DomEntryKind::StartArray => visitor.visit_seq(TapeSeqAccess::new(self)),
             _ => Err(de::Error::custom("unexpected tape entry at value position")),
         }
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         match self.tape[self.pos].kind() {
-            TapeEntryKind::Bool => visitor.visit_bool(self.tape[self.pos].payload() != 0),
+            DomEntryKind::Bool => visitor.visit_bool(self.tape[self.pos].payload() != 0),
             _ => self.deserialize_any(visitor),
         }
     }
@@ -130,12 +130,12 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
 
     fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         match self.tape[self.pos].kind() {
-            TapeEntryKind::String => {
+            DomEntryKind::String => {
                 // Zero-copy borrow from source JSON.
                 let s: &'de str = self.tape[self.pos].source_string().unwrap();
                 visitor.visit_borrowed_str(s)
             }
-            TapeEntryKind::EscapedString => {
+            DomEntryKind::EscapedString => {
                 visitor.visit_str(self.tape[self.pos].as_string().unwrap())
             }
             _ => self.deserialize_any(visitor),
@@ -154,7 +154,7 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        if self.tape[self.pos].kind() == TapeEntryKind::Null {
+        if self.tape[self.pos].kind() == DomEntryKind::Null {
             visitor.visit_none()
         } else {
             visitor.visit_some(self)
@@ -162,7 +162,7 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        if self.tape[self.pos].kind() == TapeEntryKind::Null {
+        if self.tape[self.pos].kind() == DomEntryKind::Null {
             visitor.visit_unit()
         } else {
             Err(de::Error::custom("expected null"))
@@ -186,7 +186,7 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        if self.tape[self.pos].kind() == TapeEntryKind::StartArray {
+        if self.tape[self.pos].kind() == DomEntryKind::StartArray {
             visitor.visit_seq(TapeSeqAccess::new(self))
         } else {
             Err(de::Error::custom("expected JSON array"))
@@ -211,7 +211,7 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        if self.tape[self.pos].kind() == TapeEntryKind::StartObject {
+        if self.tape[self.pos].kind() == DomEntryKind::StartObject {
             visitor.visit_map(TapeMapAccess::new(self))
         } else {
             Err(de::Error::custom("expected JSON object"))
@@ -235,11 +235,11 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
     ) -> Result<V::Value, Error> {
         match self.tape[self.pos].kind() {
             // Unit variant: "VariantName"
-            TapeEntryKind::String | TapeEntryKind::EscapedString => {
+            DomEntryKind::String | DomEntryKind::EscapedString => {
                 visitor.visit_enum(UnitVariantAccess(self))
             }
             // Newtype / struct / tuple variant: {"VariantName": <value>}
-            TapeEntryKind::StartObject => visitor.visit_enum(TapeEnumAccess::new(self)),
+            DomEntryKind::StartObject => visitor.visit_enum(TapeEnumAccess::new(self)),
             _ => Err(de::Error::custom(
                 "expected string or single-key object for enum",
             )),
@@ -256,15 +256,15 @@ impl<'de> de::Deserializer<'de> for TapeRef<'de, 'de> {
 }
 
 // ---------------------------------------------------------------------------
-// SeqAccess — wraps TapeArrayIter
+// SeqAccess — wraps DomArrayIter
 // ---------------------------------------------------------------------------
 
 struct TapeSeqAccess<'de> {
-    iter: TapeArrayIter<'de, 'de>,
+    iter: DomArrayIter<'de, 'de>,
 }
 
 impl<'de> TapeSeqAccess<'de> {
-    fn new(r: TapeRef<'de, 'de>) -> Self {
+    fn new(r: DomRef<'de, 'de>) -> Self {
         Self {
             iter: r.array_iter().expect("expected StartArray entry"),
         }
@@ -286,17 +286,17 @@ impl<'de> SeqAccess<'de> for TapeSeqAccess<'de> {
 }
 
 // ---------------------------------------------------------------------------
-// MapAccess — wraps TapeObjectIter
+// MapAccess — wraps DomObjectIter
 // ---------------------------------------------------------------------------
 
 struct TapeMapAccess<'de> {
-    iter: TapeObjectIter<'de, 'de>,
-    /// Stash the value TapeRef between next_key and next_value calls.
-    pending_value: Option<TapeRef<'de, 'de>>,
+    iter: DomObjectIter<'de, 'de>,
+    /// Stash the value DomRef between next_key and next_value calls.
+    pending_value: Option<DomRef<'de, 'de>>,
 }
 
 impl<'de> TapeMapAccess<'de> {
-    fn new(r: TapeRef<'de, 'de>) -> Self {
+    fn new(r: DomRef<'de, 'de>) -> Self {
         Self {
             iter: r.object_iter().expect("expected StartObject entry"),
             pending_value: None,
@@ -330,7 +330,7 @@ impl<'de> MapAccess<'de> for TapeMapAccess<'de> {
 }
 
 // ---------------------------------------------------------------------------
-// KeyDeserializer — borrowed string key from TapeObjectIter
+// KeyDeserializer — borrowed string key from DomObjectIter
 // ---------------------------------------------------------------------------
 
 /// A minimal deserializer for object keys (`&'de str` borrowed from the tape).
@@ -355,7 +355,7 @@ impl<'de> de::Deserializer<'de> for KeyDeserializer<'de> {
 // ---------------------------------------------------------------------------
 
 /// Unit variant: tape cursor is on a String entry (e.g. `"Foo"`).
-struct UnitVariantAccess<'de>(TapeRef<'de, 'de>);
+struct UnitVariantAccess<'de>(DomRef<'de, 'de>);
 
 impl<'de> EnumAccess<'de> for UnitVariantAccess<'de> {
     type Error = Error;
@@ -393,11 +393,11 @@ impl<'de> VariantAccess<'de> for UnitOnly {
 /// Newtype/struct/tuple variant: `{"VariantName": <payload>}`.
 struct TapeEnumAccess<'de> {
     key: &'de str,
-    val: TapeRef<'de, 'de>,
+    val: DomRef<'de, 'de>,
 }
 
 impl<'de> TapeEnumAccess<'de> {
-    fn new(r: TapeRef<'de, 'de>) -> Self {
+    fn new(r: DomRef<'de, 'de>) -> Self {
         let mut iter = r.object_iter().expect("expected StartObject");
         let (key, val) = iter
             .next()
@@ -408,18 +408,18 @@ impl<'de> TapeEnumAccess<'de> {
 
 impl<'de> EnumAccess<'de> for TapeEnumAccess<'de> {
     type Error = Error;
-    type Variant = TapeRef<'de, 'de>;
+    type Variant = DomRef<'de, 'de>;
 
     fn variant_seed<V: DeserializeSeed<'de>>(
         self,
         seed: V,
-    ) -> Result<(V::Value, TapeRef<'de, 'de>), Error> {
+    ) -> Result<(V::Value, DomRef<'de, 'de>), Error> {
         let variant = seed.deserialize(KeyDeserializer(self.key))?;
         Ok((variant, self.val))
     }
 }
 
-impl<'de> VariantAccess<'de> for TapeRef<'de, 'de> {
+impl<'de> VariantAccess<'de> for DomRef<'de, 'de> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<(), Error> {
@@ -447,32 +447,32 @@ impl<'de> VariantAccess<'de> for TapeRef<'de, 'de> {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Deserialize a value of type `T` from a [`TapeRef`] cursor.
+/// Deserialize a value of type `T` from a [`DomRef`] cursor.
 ///
 /// `T` must implement [`serde::Deserialize`].  String values with no escape
 /// sequences are borrowed zero-copy from the original source JSON for `'de`.
 ///
 /// Pass `tape.root().unwrap()` to deserialize the whole document, or any
-/// other `TapeRef` cursor to deserialize a sub-value.
+/// other `DomRef` cursor to deserialize a sub-value.
 ///
 /// # Example
 ///
 /// ```rust
 /// # #[cfg(feature = "serde")]
 /// # {
-/// use asmjson::{parse_to_tape, de::from_taperef};
+/// use asmjson::{parse_to_dom, de::from_taperef};
 /// use serde::Deserialize;
 ///
 /// #[derive(Deserialize, PartialEq, Debug)]
 /// struct Point { x: i64, y: i64 }
 ///
-/// let tape = parse_to_tape(r#"{"x":1,"y":2}"#).unwrap();
+/// let tape = parse_to_dom(r#"{"x":1,"y":2}"#).unwrap();
 /// let root = tape.root().unwrap();
 /// let p: Point = from_taperef(root).unwrap();
 /// assert_eq!(p, Point { x: 1, y: 2 });
 /// # }
 /// ```
-pub fn from_taperef<'de, T>(r: TapeRef<'de, 'de>) -> Result<T, Error>
+pub fn from_taperef<'de, T>(r: DomRef<'de, 'de>) -> Result<T, Error>
 where
     T: Deserialize<'de>,
 {

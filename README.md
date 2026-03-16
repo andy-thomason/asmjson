@@ -17,16 +17,16 @@ string bodies to be skipped in a single operation.
 ## Quick start
 
 ```rust
-use asmjson::{parse_to_tape, JsonRef};
+use asmjson::{parse_to_dom, JsonRef};
 
-let tape = parse_to_tape(r#"{"name":"Alice","age":30}"#).unwrap();
+let tape = parse_to_dom(r#"{"name":"Alice","age":30}"#).unwrap();
 
 assert_eq!(tape.root().get("name").as_str(), Some("Alice"));
 assert_eq!(tape.root().get("age").as_i64(), Some(30));
 ```
 
 For maximum throughput on CPUs with AVX-512BW (Ice Lake+, Zen 4+), use the
-unsafe assembly entry points `parse_to_tape_zmm` / `parse_with_zmm`.  It is
+unsafe assembly entry points `parse_to_dom_zmm` / `parse_with_zmm`.  It is
 the caller's responsibility to ensure AVX-512BW support before calling them.
 
 ## Benchmarks
@@ -53,7 +53,7 @@ not available on other architectures.
 `asmjson/sax` (`parse_with_zmm` + a `JsonWriter` sink) is the fastest overall:
 it leads on string objects (8.29 GiB/s, +20 % over `asmjson/dom`) and mixed
 JSON (1.17 GiB/s, +30 % over `asmjson/dom`, +145 % over sonic-rs) because it
-requires no tape allocation.  `asmjson/dom` (`parse_to_tape_zmm`) writes a flat
+requires no tape allocation.  `asmjson/dom` (`parse_to_dom_zmm`) writes a flat
 `TapeEntry` array directly in assembly — one entry per value — so subsequent
 traversal is a single linear scan with no pointer chasing; it leads marginally
 on string arrays (10.93 GiB/s) where the tape scan overhead is negligible.
@@ -72,8 +72,8 @@ start on a level footing with the other parsers on these workloads.
 
 ## Optimisation tips
 
-`TapeRef` is a plain `Copy` cursor — two `usize`s — so it is cheap to store
-and reuse.  Holding on to a `TapeRef` you have already located lets you skip
+`DomRef` is a plain `Copy` cursor — two `usize`s — so it is cheap to store
+and reuse.  Holding on to a `DomRef` you have already located lets you skip
 re-scanning work on subsequent accesses.
 
 ### Cache field refs from a one-pass object scan
@@ -83,15 +83,15 @@ need several fields from the same object, iterate once with `object_iter` and
 keep the values you care about:
 
 ```rust
-use asmjson::{parse_to_tape, JsonRef, TapeRef};
+use asmjson::{parse_to_dom, JsonRef, DomRef};
 
 let src = r#"{"items":[1,2,3],"meta":{"count":3}}"#;
-let tape = parse_to_tape(src).unwrap();
+let tape = parse_to_dom(src).unwrap();
 let root = tape.root().unwrap();
 
 // Single pass — O(n_keys) regardless of how many fields we need.
-let mut items_ref: Option<TapeRef> = None;
-let mut meta_ref:  Option<TapeRef> = None;
+let mut items_ref: Option<DomRef> = None;
+let mut meta_ref:  Option<DomRef> = None;
 for (key, val) in root.object_iter().unwrap() {
     match key {
         "items" => items_ref = Some(val),
@@ -108,18 +108,18 @@ assert_eq!(count, Some(3));
 ### Collect array elements for indexed or multi-pass access
 
 `array_iter` yields each element once in document order.  Collecting the
-results into a `Vec<TapeRef>` gives you random access and any number of
+results into a `Vec<DomRef>` gives you random access and any number of
 further passes at zero additional parsing cost:
 
 ```rust
-use asmjson::{parse_to_tape, JsonRef, TapeRef};
+use asmjson::{parse_to_dom, JsonRef, DomRef};
 
 let src = r#"[{"name":"Alice","score":91},{"name":"Bob","score":78},{"name":"Carol","score":85}]"#;
-let tape = parse_to_tape(src).unwrap();
+let tape = parse_to_dom(src).unwrap();
 let root = tape.root().unwrap();
 
 // Collect once — O(n) scan.
-let rows: Vec<TapeRef> = root.array_iter().unwrap().collect();
+let rows: Vec<DomRef> = root.array_iter().unwrap().collect();
 
 // Random access is now O(1) — no re-scanning.
 assert_eq!(rows[1].get("name").unwrap().as_str(), Some("Bob"));
@@ -133,7 +133,7 @@ assert_eq!(total, 91 + 78 + 85);
 
 ## Output formats
 
-- `parse_to_tape` — allocates a flat `Tape` of tokens with O(1) structural skips.
+- `parse_to_dom` — allocates a flat `Tape` of tokens with O(1) structural skips.
 - `parse_with` — drives a custom `JsonWriter` sink; zero extra allocation.
 
 ## API
@@ -142,9 +142,9 @@ Four entry points are provided:
 
 | Function                   | Safety   | Description |
 |----------------------------|----------|-------------|
-| `parse_to_tape(src)`       | safe     | Parse to a flat `Tape`; portable SWAR classifier. |
+| `parse_to_dom(src)`       | safe     | Parse to a flat `Dom`; portable SWAR classifier. |
 | `parse_with(src, writer)`  | safe     | Drive a custom `JsonWriter`; portable SWAR classifier. |
-| `unsafe parse_to_tape_zmm(src, cap)` | **unsafe** | Parse to `Tape`; AVX-512BW assembly (direct tape write). |
+| `unsafe parse_to_dom_zmm(src, cap)` | **unsafe** | Parse to `Dom`; AVX-512BW assembly (direct tape write). |
 | `unsafe parse_with_zmm(src, writer)` | **unsafe** | Drive a `JsonWriter`; AVX-512BW assembly (vtable dispatch). |
 
 The `unsafe` variants require a CPU with AVX-512BW support.  Calling them on

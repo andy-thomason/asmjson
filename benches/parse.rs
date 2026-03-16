@@ -1,13 +1,13 @@
 #[cfg(feature = "stats")]
-use asmjson::parse_to_tape as parse_json;
+use asmjson::parse_to_dom as parse_json;
 #[cfg(target_arch = "x86_64")]
-use asmjson::parse_to_tape_zmm;
+use asmjson::parse_to_dom_zmm;
 #[cfg(target_arch = "x86_64")]
 use asmjson::parse_with_zmm;
 use asmjson::sax::Sax;
 #[cfg(feature = "stats")]
 use asmjson::stats;
-use asmjson::{TapeEntryKind, parse_to_tape};
+use asmjson::{DomEntryKind, parse_to_dom};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
 // ---------------------------------------------------------------------------
@@ -59,11 +59,11 @@ impl<'src> Sax<'src> for LenSumWriter {
 
 /// Sum the lengths of every String and Key entry in a tape.
 #[inline]
-fn tape_sum_lens(tape: &asmjson::Dom<'_>) -> usize {
+fn dom_sum_lens(tape: &asmjson::Dom<'_>) -> usize {
     tape.entries
         .iter()
         .map(|e| match e.kind() {
-            TapeEntryKind::String | TapeEntryKind::Key => e.as_string().map_or(0, |s| s.len()),
+            DomEntryKind::String | DomEntryKind::Key => e.as_string().map_or(0, |s| s.len()),
             _ => 0,
         })
         .sum()
@@ -286,14 +286,14 @@ fn bench_string_array(c: &mut Criterion) {
     #[cfg(target_arch = "x86_64")]
     group.bench_function("asmjson/dom", |b| {
         b.iter(|| {
-            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let tape = unsafe { parse_to_dom_zmm(&data, None) }.unwrap();
+            std::hint::black_box(dom_sum_lens(&tape))
         });
     });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
-            let tape = parse_to_tape(&data).unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let tape = parse_to_dom(&data).unwrap();
+            std::hint::black_box(dom_sum_lens(&tape))
         });
     });
     group.bench_function("simd-json", |b| {
@@ -334,14 +334,14 @@ fn bench_string_object(c: &mut Criterion) {
     #[cfg(target_arch = "x86_64")]
     group.bench_function("asmjson/dom", |b| {
         b.iter(|| {
-            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let tape = unsafe { parse_to_dom_zmm(&data, None) }.unwrap();
+            std::hint::black_box(dom_sum_lens(&tape))
         });
     });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
-            let tape = parse_to_tape(&data).unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let tape = parse_to_dom(&data).unwrap();
+            std::hint::black_box(dom_sum_lens(&tape))
         });
     });
     group.bench_function("simd-json", |b| {
@@ -382,14 +382,14 @@ fn bench_mixed(c: &mut Criterion) {
     #[cfg(target_arch = "x86_64")]
     group.bench_function("asmjson/dom", |b| {
         b.iter(|| {
-            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let tape = unsafe { parse_to_dom_zmm(&data, None) }.unwrap();
+            std::hint::black_box(dom_sum_lens(&tape))
         });
     });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
-            let tape = parse_to_tape(&data).unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let tape = parse_to_dom(&data).unwrap();
+            std::hint::black_box(dom_sum_lens(&tape))
         });
     });
     group.bench_function("simd-json", |b| {

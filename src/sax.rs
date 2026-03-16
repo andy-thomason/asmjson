@@ -5,7 +5,7 @@
 /// Receives a stream of structural events as the parser walks the input.
 ///
 /// Implement this trait to produce any output from a single pass over the JSON
-/// source.  The built-in implementation used by [`crate::parse_to_tape`]
+/// source.  The built-in implementation used by [`crate::parse_to_dom`]
 /// produces a flat [`crate::dom::Dom`].
 ///
 /// A custom implementation can be driven via [`crate::parse_with`] (portable

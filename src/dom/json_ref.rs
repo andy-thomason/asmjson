@@ -1,4 +1,4 @@
-use super::{TapeEntryKind, TapeRef, tape_skip};
+use super::{DomEntryKind, DomRef, dom_skip};
 
 // ---------------------------------------------------------------------------
 // JsonRef trait
@@ -11,14 +11,14 @@ use super::{TapeEntryKind, TapeRef, tape_skip};
 /// least `'a`.
 ///
 /// Implemented by:
-/// - [`TapeRef<'a, _>`] — lightweight cursor into a flat [`super::Dom`].
+/// - [`DomRef<'a, _>`] — lightweight cursor into a flat [`super::Dom`].
 /// - `Option<J>` where `J: JsonRef<'a>` — transparent wrapper enabling chaining
 ///   without intermediate `?` or `.and_then`: `root.get("a").get("b").as_str()`.
 pub trait JsonRef<'a>: Sized + Copy {
     /// The concrete node type returned by [`get`](JsonRef::get) and
     /// [`index_at`](JsonRef::index_at).
     ///
-    /// For concrete node types ([`TapeRef`]) this is `Self`.
+    /// For concrete node types ([`DomRef`]) this is `Self`.
     /// For `Option<J>` it is `J::Item`, keeping chains flat:
     /// `opt.get("a")` returns `Option<J::Item>`, not `Option<Option<J>>`.
     type Item: JsonRef<'a>;
@@ -103,22 +103,22 @@ pub trait JsonRef<'a>: Sized + Copy {
 }
 
 // ---------------------------------------------------------------------------
-// JsonRef impl for TapeRef<'t, 'src>
+// JsonRef impl for DomRef<'t, 'src>
 // ---------------------------------------------------------------------------
 
-impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
+impl<'t, 'src: 't> JsonRef<'t> for DomRef<'t, 'src> {
     type Item = Self;
 
     fn is_array(self) -> bool {
-        self.tape[self.pos].kind() == TapeEntryKind::StartArray
+        self.tape[self.pos].kind() == DomEntryKind::StartArray
     }
 
     fn is_object(self) -> bool {
-        self.tape[self.pos].kind() == TapeEntryKind::StartObject
+        self.tape[self.pos].kind() == DomEntryKind::StartObject
     }
 
     fn as_null(self) -> Option<()> {
-        (self.tape[self.pos].kind() == TapeEntryKind::Null).then_some(())
+        (self.tape[self.pos].kind() == DomEntryKind::Null).then_some(())
     }
 
     fn as_bool(self) -> Option<bool> {
@@ -140,12 +140,12 @@ impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
             let k_str: &str = self.tape[i].as_key()?;
             let val_pos = i + 1;
             if k_str == key {
-                return Some(TapeRef {
+                return Some(DomRef {
                     tape: self.tape,
                     pos: val_pos,
                 });
             }
-            i = tape_skip(self.tape, val_pos);
+            i = dom_skip(self.tape, val_pos);
         }
         None
     }
@@ -156,12 +156,12 @@ impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
         let mut count = 0usize;
         while i < end_idx {
             if count == idx {
-                return Some(TapeRef {
+                return Some(DomRef {
                     tape: self.tape,
                     pos: i,
                 });
             }
-            i = tape_skip(self.tape, i);
+            i = dom_skip(self.tape, i);
             count += 1;
         }
         None
@@ -172,7 +172,7 @@ impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
             let mut count = 0usize;
             let mut i = self.pos + 1;
             while i < end_idx {
-                i = tape_skip(self.tape, i);
+                i = dom_skip(self.tape, i);
                 count += 1;
             }
             return Some(count);
@@ -182,7 +182,7 @@ impl<'t, 'src: 't> JsonRef<'t> for TapeRef<'t, 'src> {
             let mut i = self.pos + 1;
             while i < end_idx {
                 // entries[i] is Key, entries[i+1] is value
-                i = tape_skip(self.tape, i + 1);
+                i = dom_skip(self.tape, i + 1);
                 count += 1;
             }
             return Some(count);
@@ -250,16 +250,16 @@ impl<'a, J: JsonRef<'a>> JsonRef<'a> for Option<J> {
 #[cfg(test)]
 mod tests {
     use super::super::Dom;
-    use crate::parse_to_tape;
+    use crate::parse_to_dom;
 
     use super::JsonRef;
 
     fn run_tape(json: &'static str) -> Option<Dom<'static>> {
-        parse_to_tape(json)
+        parse_to_dom(json)
     }
 
     // -----------------------------------------------------------------------
-    // JsonRef tests — exercise the trait on TapeRef
+    // JsonRef tests — exercise the trait on DomRef
     // -----------------------------------------------------------------------
 
     #[test]

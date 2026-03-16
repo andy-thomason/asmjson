@@ -1899,3 +1899,57 @@ Unchanged names: `TapeRef`, `TapeWriter` (private), `TapeArrayIter`,
 All 27 unit tests and 7 doc-tests pass.  No regressions.
 
 **Commit**: `f386977` refactor: rename Tape→Dom, TapeEntry→DomEntry
+
+---
+
+## Session 25 — Complete Dom* rename + asm module rename
+
+### What was done
+
+Completed the rename of all remaining `Tape*` identifiers to `Dom*` and renamed
+the two x86-64 assembly files to use `_sax` / `_dom` suffixes to match the
+module naming established in sessions 23–24.
+
+Files touched: `src/lib.rs`, `src/dom/mod.rs`, `src/dom/json_ref.rs`,
+`src/de.rs`, `src/sax.rs`, `benches/parse.rs`, `examples/perf_zmm_tape.rs`
+(→ renamed `examples/perf_zmm_dom.rs`), `README.md`, `build.rs`,
+`asm/x86_64/parse_json_zmm_dyn.S` (→ `parse_json_zmm_sax.S`),
+`asm/x86_64/parse_json_zmm_tape.S` (→ `parse_json_zmm_dom.S`).
+
+Full rename table:
+
+| Old name | New name |
+|---|---|
+| `TapeRef` | `DomRef` |
+| `TapeArrayIter` | `DomArrayIter` |
+| `TapeObjectIter` | `DomObjectIter` |
+| `TapeEntryKind` | `DomEntryKind` |
+| `TapeWriter` | `DomWriter` |
+| `tape_skip` | `dom_skip` |
+| `tape_take_box_str` | `dom_take_box_str` |
+| `parse_json_zmm_dyn` | `parse_json_zmm_sax` |
+| `parse_json_zmm_tape` | `parse_json_zmm_dom` |
+| `parse_to_tape` | `parse_to_dom` |
+| `parse_to_tape_zmm` | `parse_to_dom_zmm` |
+| `tape_sum_lens` (bench) | `dom_sum_lens` |
+| `parse_json_zmm_dyn.S` | `parse_json_zmm_sax.S` |
+| `parse_json_zmm_tape.S` | `parse_json_zmm_dom.S` |
+| `examples/perf_zmm_tape.rs` | `examples/perf_zmm_dom.rs` |
+
+### Design decisions
+
+The `_sax` suffix is used for the AVX-512 path that dispatches through a
+trait-object vtable (the SAX/event-driven interface), and `_dom` for the path
+that writes directly into a flat DOM tape.  This mirrors the Rust-side
+`Sax` trait / `Dom` struct split introduced in sessions 23–24.
+
+README code examples are included as doc-tests via `include_str!`, so the
+README also needed updating — caught by a second failing `cargo test` pass.
+
+### Results
+
+27 unit tests + 7 doc-tests, 0 failures after all renames.
+
+### Commit
+
+`98870e1` refactor: rename remaining Tape*→Dom*, asm modules to _sax/_dom suffixes

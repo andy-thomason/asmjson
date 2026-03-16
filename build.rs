@@ -3,12 +3,12 @@ fn main() {
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     if target_arch == "x86_64" {
         cc::Build::new()
-            .file("asm/x86_64/parse_json_zmm_dyn.S")
-            .compile("parse_json_zmm_dyn");
+            .file("asm/x86_64/parse_json_zmm_sax.S")
+            .compile("parse_json_zmm_sax");
         cc::Build::new()
-            .file("asm/x86_64/parse_json_zmm_tape.S")
-            .compile("parse_json_zmm_tape");
+            .file("asm/x86_64/parse_json_zmm_dom.S")
+            .compile("parse_json_zmm_dom");
     }
-    println!("cargo:rerun-if-changed=asm/x86_64/parse_json_zmm_dyn.S");
-    println!("cargo:rerun-if-changed=asm/x86_64/parse_json_zmm_tape.S");
+    println!("cargo:rerun-if-changed=asm/x86_64/parse_json_zmm_sax.S");
+    println!("cargo:rerun-if-changed=asm/x86_64/parse_json_zmm_dom.S");
 }

@@ -3,16 +3,16 @@ pub mod json_ref;
 use crate::sax::Sax;
 
 // ---------------------------------------------------------------------------
-// TapeEntryKind — top 4 bits of the tag word
+// DomEntryKind — top 4 bits of the tag word
 // ---------------------------------------------------------------------------
 
 /// Discriminant stored in bits 63–60 of `DomEntry::tag_payload`.
 ///
 /// The numeric values are fixed and part of the public ABI (the hand-written
-/// assembly in `parse_json_zmm_tape.S` depends on them).
+/// assembly in `parse_json_zmm_dom.S` depends on them).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum TapeEntryKind {
+pub enum DomEntryKind {
     Null = 0,
     Bool = 1,
     Number = 2,
@@ -40,7 +40,7 @@ const PAYLOAD_MASK: u64 = u64::MAX >> 4; // low 60 bits
 ///
 /// | word | bits | meaning |
 /// |------|------|---------|
-/// | 0 (offset 0) | 63–60 | [`TapeEntryKind`] discriminant |
+/// | 0 (offset 0) | 63–60 | [`DomEntryKind`] discriminant |
 /// | 0 (offset 0) | 59–0  | string/key length **or** object/array end-index |
 /// | 1 (offset 8) | 63–0  | pointer to string bytes (null for non-string kinds) |
 ///
@@ -68,7 +68,7 @@ unsafe impl<'a> Sync for DomEntry<'a> {}
 impl<'a> Drop for DomEntry<'a> {
     fn drop(&mut self) {
         let kind = self.kind();
-        if kind == TapeEntryKind::EscapedString || kind == TapeEntryKind::EscapedKey {
+        if kind == DomEntryKind::EscapedString || kind == DomEntryKind::EscapedKey {
             if !self.ptr.is_null() {
                 let len = self.payload() as usize;
                 // SAFETY: these were originally created by Box::into_raw(s.into_boxed_str()).
@@ -84,7 +84,7 @@ impl<'a> Drop for DomEntry<'a> {
 impl<'a> Clone for DomEntry<'a> {
     fn clone(&self) -> Self {
         let kind = self.kind();
-        if kind == TapeEntryKind::EscapedString || kind == TapeEntryKind::EscapedKey {
+        if kind == DomEntryKind::EscapedString || kind == DomEntryKind::EscapedKey {
             // Deep-copy the heap allocation.
             let s = self.as_escaped_str_unchecked();
             let boxed: Box<str> = s.into();
@@ -109,21 +109,21 @@ impl<'a> Clone for DomEntry<'a> {
 impl<'a> std::fmt::Debug for DomEntry<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.kind() {
-            TapeEntryKind::Null => write!(f, "Null"),
-            TapeEntryKind::Bool => write!(f, "Bool({})", self.payload() != 0),
-            TapeEntryKind::Number => write!(f, "Number({:?})", self.as_str_unchecked()),
-            TapeEntryKind::String => write!(f, "String({:?})", self.as_str_unchecked()),
-            TapeEntryKind::EscapedString => {
+            DomEntryKind::Null => write!(f, "Null"),
+            DomEntryKind::Bool => write!(f, "Bool({})", self.payload() != 0),
+            DomEntryKind::Number => write!(f, "Number({:?})", self.as_str_unchecked()),
+            DomEntryKind::String => write!(f, "String({:?})", self.as_str_unchecked()),
+            DomEntryKind::EscapedString => {
                 write!(f, "EscapedString({:?})", self.as_escaped_str_unchecked())
             }
-            TapeEntryKind::Key => write!(f, "Key({:?})", self.as_str_unchecked()),
-            TapeEntryKind::EscapedKey => {
+            DomEntryKind::Key => write!(f, "Key({:?})", self.as_str_unchecked()),
+            DomEntryKind::EscapedKey => {
                 write!(f, "EscapedKey({:?})", self.as_escaped_str_unchecked())
             }
-            TapeEntryKind::StartObject => write!(f, "StartObject({})", self.payload()),
-            TapeEntryKind::EndObject => write!(f, "EndObject"),
-            TapeEntryKind::StartArray => write!(f, "StartArray({})", self.payload()),
-            TapeEntryKind::EndArray => write!(f, "EndArray"),
+            DomEntryKind::StartObject => write!(f, "StartObject({})", self.payload()),
+            DomEntryKind::EndObject => write!(f, "EndObject"),
+            DomEntryKind::StartArray => write!(f, "StartArray({})", self.payload()),
+            DomEntryKind::EndArray => write!(f, "EndArray"),
         }
     }
 }
@@ -135,15 +135,15 @@ impl<'a> PartialEq for DomEntry<'a> {
             return false;
         }
         match self.kind() {
-            TapeEntryKind::Null | TapeEntryKind::EndObject | TapeEntryKind::EndArray => true,
-            TapeEntryKind::Bool => self.payload() == other.payload(),
-            TapeEntryKind::StartObject | TapeEntryKind::StartArray => {
+            DomEntryKind::Null | DomEntryKind::EndObject | DomEntryKind::EndArray => true,
+            DomEntryKind::Bool => self.payload() == other.payload(),
+            DomEntryKind::StartObject | DomEntryKind::StartArray => {
                 self.payload() == other.payload()
             }
-            TapeEntryKind::Number | TapeEntryKind::String | TapeEntryKind::Key => {
+            DomEntryKind::Number | DomEntryKind::String | DomEntryKind::Key => {
                 self.as_str_unchecked() == other.as_str_unchecked()
             }
-            TapeEntryKind::EscapedString | TapeEntryKind::EscapedKey => {
+            DomEntryKind::EscapedString | DomEntryKind::EscapedKey => {
                 self.as_escaped_str_unchecked() == other.as_escaped_str_unchecked()
             }
         }
@@ -158,7 +158,7 @@ impl<'a> DomEntry<'a> {
     // ---- private helpers ----
 
     #[inline]
-    fn make(kind: TapeEntryKind, payload: u64, ptr: *const u8) -> Self {
+    fn make(kind: DomEntryKind, payload: u64, ptr: *const u8) -> Self {
         Self {
             tag_payload: ((kind as u64) << KIND_SHIFT) | (payload & PAYLOAD_MASK),
             ptr,
@@ -168,8 +168,8 @@ impl<'a> DomEntry<'a> {
 
     /// The discriminant.
     #[inline]
-    pub fn kind(&self) -> TapeEntryKind {
-        // SAFETY: we only ever write valid TapeEntryKind values into the top 4 bits.
+    pub fn kind(&self) -> DomEntryKind {
+        // SAFETY: we only ever write valid DomEntryKind values into the top 4 bits.
         unsafe { std::mem::transmute((self.tag_payload >> KIND_SHIFT) as u8) }
     }
 
@@ -197,56 +197,56 @@ impl<'a> DomEntry<'a> {
 
     #[inline]
     pub fn null_entry() -> Self {
-        Self::make(TapeEntryKind::Null, 0, std::ptr::null())
+        Self::make(DomEntryKind::Null, 0, std::ptr::null())
     }
     #[inline]
     pub fn bool_entry(v: bool) -> Self {
-        Self::make(TapeEntryKind::Bool, v as u64, std::ptr::null())
+        Self::make(DomEntryKind::Bool, v as u64, std::ptr::null())
     }
     #[inline]
     pub fn number_entry(s: &'a str) -> Self {
-        Self::make(TapeEntryKind::Number, s.len() as u64, s.as_ptr())
+        Self::make(DomEntryKind::Number, s.len() as u64, s.as_ptr())
     }
     #[inline]
     pub fn string_entry(s: &'a str) -> Self {
-        Self::make(TapeEntryKind::String, s.len() as u64, s.as_ptr())
+        Self::make(DomEntryKind::String, s.len() as u64, s.as_ptr())
     }
     #[inline]
     pub fn escaped_string_entry(s: Box<str>) -> Self {
         let len = s.len() as u64;
         let ptr = Box::into_raw(s) as *mut u8 as *const u8;
-        Self::make(TapeEntryKind::EscapedString, len, ptr)
+        Self::make(DomEntryKind::EscapedString, len, ptr)
     }
     #[inline]
     pub fn key_entry(s: &'a str) -> Self {
-        Self::make(TapeEntryKind::Key, s.len() as u64, s.as_ptr())
+        Self::make(DomEntryKind::Key, s.len() as u64, s.as_ptr())
     }
     #[inline]
     pub fn escaped_key_entry(s: Box<str>) -> Self {
         let len = s.len() as u64;
         let ptr = Box::into_raw(s) as *mut u8 as *const u8;
-        Self::make(TapeEntryKind::EscapedKey, len, ptr)
+        Self::make(DomEntryKind::EscapedKey, len, ptr)
     }
     /// `payload` will be backfilled with the end-index later.
     #[inline]
     pub fn start_object_entry(end_idx: usize) -> Self {
-        Self::make(TapeEntryKind::StartObject, end_idx as u64, std::ptr::null())
+        Self::make(DomEntryKind::StartObject, end_idx as u64, std::ptr::null())
     }
     #[inline]
     pub fn end_object_entry() -> Self {
-        Self::make(TapeEntryKind::EndObject, 0, std::ptr::null())
+        Self::make(DomEntryKind::EndObject, 0, std::ptr::null())
     }
     /// `payload` will be backfilled with the end-index later.
     #[inline]
     pub fn start_array_entry(end_idx: usize) -> Self {
-        Self::make(TapeEntryKind::StartArray, end_idx as u64, std::ptr::null())
+        Self::make(DomEntryKind::StartArray, end_idx as u64, std::ptr::null())
     }
     #[inline]
     pub fn end_array_entry() -> Self {
-        Self::make(TapeEntryKind::EndArray, 0, std::ptr::null())
+        Self::make(DomEntryKind::EndArray, 0, std::ptr::null())
     }
 
-    // ---- backfill helper (used by TapeWriter::end_object / end_array) ----
+    // ---- backfill helper (used by DomWriter::end_object / end_array) ----
 
     /// Overwrite the payload field (low 60 bits) without changing the kind.
     #[inline]
@@ -259,7 +259,7 @@ impl<'a> DomEntry<'a> {
     /// Returns `Some(end_index)` if this is `StartObject`, else `None`.
     #[inline]
     pub fn as_start_object(&self) -> Option<usize> {
-        if self.kind() == TapeEntryKind::StartObject {
+        if self.kind() == DomEntryKind::StartObject {
             Some(self.payload() as usize)
         } else {
             None
@@ -268,7 +268,7 @@ impl<'a> DomEntry<'a> {
     /// Returns `Some(end_index)` if this is `StartArray`, else `None`.
     #[inline]
     pub fn as_start_array(&self) -> Option<usize> {
-        if self.kind() == TapeEntryKind::StartArray {
+        if self.kind() == DomEntryKind::StartArray {
             Some(self.payload() as usize)
         } else {
             None
@@ -277,7 +277,7 @@ impl<'a> DomEntry<'a> {
     /// Returns `Some(b)` if this is `Bool`, else `None`.
     #[inline]
     pub fn as_bool(&self) -> Option<bool> {
-        if self.kind() == TapeEntryKind::Bool {
+        if self.kind() == DomEntryKind::Bool {
             Some(self.payload() != 0)
         } else {
             None
@@ -286,7 +286,7 @@ impl<'a> DomEntry<'a> {
     /// Returns the number text if this is `Number`, else `None`.
     #[inline]
     pub fn as_number(&self) -> Option<&'a str> {
-        if self.kind() == TapeEntryKind::Number {
+        if self.kind() == DomEntryKind::Number {
             Some(self.as_str_unchecked())
         } else {
             None
@@ -296,8 +296,8 @@ impl<'a> DomEntry<'a> {
     #[inline]
     pub fn as_string(&self) -> Option<&str> {
         match self.kind() {
-            TapeEntryKind::String => Some(self.as_str_unchecked()),
-            TapeEntryKind::EscapedString => Some(self.as_escaped_str_unchecked()),
+            DomEntryKind::String => Some(self.as_str_unchecked()),
+            DomEntryKind::EscapedString => Some(self.as_escaped_str_unchecked()),
             _ => None,
         }
     }
@@ -307,7 +307,7 @@ impl<'a> DomEntry<'a> {
     /// (heap-allocated) and for all non-string kinds.
     #[inline]
     pub(crate) fn source_string(&self) -> Option<&'a str> {
-        if self.kind() == TapeEntryKind::String {
+        if self.kind() == DomEntryKind::String {
             Some(self.as_str_unchecked())
         } else {
             None
@@ -317,8 +317,8 @@ impl<'a> DomEntry<'a> {
     #[inline]
     pub fn as_key(&self) -> Option<&str> {
         match self.kind() {
-            TapeEntryKind::Key => Some(self.as_str_unchecked()),
-            TapeEntryKind::EscapedKey => Some(self.as_escaped_str_unchecked()),
+            DomEntryKind::Key => Some(self.as_str_unchecked()),
+            DomEntryKind::EscapedKey => Some(self.as_escaped_str_unchecked()),
             _ => None,
         }
     }
@@ -336,13 +336,13 @@ impl<'a> DomEntry<'a> {
     };
     /// Alias: `DomEntry::EndObject` → `DomEntry::end_object_entry()`.
     pub const EndObject: DomEntry<'static> = DomEntry {
-        tag_payload: (TapeEntryKind::EndObject as u64) << KIND_SHIFT,
+        tag_payload: (DomEntryKind::EndObject as u64) << KIND_SHIFT,
         ptr: std::ptr::null(),
         _marker: std::marker::PhantomData,
     };
     /// Alias: `DomEntry::EndArray` → `DomEntry::end_array_entry()`.
     pub const EndArray: DomEntry<'static> = DomEntry {
-        tag_payload: (TapeEntryKind::EndArray as u64) << KIND_SHIFT,
+        tag_payload: (DomEntryKind::EndArray as u64) << KIND_SHIFT,
         ptr: std::ptr::null(),
         _marker: std::marker::PhantomData,
     };
@@ -389,7 +389,7 @@ impl<'a> DomEntry<'a> {
     }
 }
 
-/// A flat sequence of [`DomEntry`] tokens produced by [`crate::parse_to_tape`].
+/// A flat sequence of [`DomEntry`] tokens produced by [`crate::parse_to_dom`].
 ///
 /// Each `StartObject(n)` / `StartArray(n)` carries the index of its matching
 /// closer, enabling O(1) structural skips:
@@ -423,10 +423,10 @@ impl<'a> Drop for Dom<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// TapeWriter — builds the flat Dom
+// DomWriter — builds the flat Dom
 // ---------------------------------------------------------------------------
 
-pub(crate) struct TapeWriter<'a> {
+pub(crate) struct DomWriter<'a> {
     entries: Vec<DomEntry<'a>>,
     /// Indices of unmatched `StartObject` / `StartArray` waiting for backfill.
     open: Vec<usize>,
@@ -434,7 +434,7 @@ pub(crate) struct TapeWriter<'a> {
     has_escapes: bool,
 }
 
-impl<'a> TapeWriter<'a> {
+impl<'a> DomWriter<'a> {
     pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -444,7 +444,7 @@ impl<'a> TapeWriter<'a> {
     }
 }
 
-impl<'a> Sax<'a> for TapeWriter<'a> {
+impl<'a> Sax<'a> for DomWriter<'a> {
     type Output = Dom<'a>;
 
     fn null(&mut self) {
@@ -507,7 +507,7 @@ impl<'a> Sax<'a> for TapeWriter<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// TapeRef — lightweight cursor into a Dom
+// DomRef — lightweight cursor into a Dom
 // ---------------------------------------------------------------------------
 
 /// A lightweight cursor into a [`Dom`], pointing at a single entry by index.
@@ -519,19 +519,19 @@ impl<'a> Sax<'a> for TapeWriter<'a> {
 ///
 /// Created via [`Dom::root`].  Implements [`crate::JsonRef`].
 #[derive(Clone, Copy)]
-pub struct TapeRef<'t, 'src: 't> {
+pub struct DomRef<'t, 'src: 't> {
     pub(crate) tape: &'t [DomEntry<'src>],
     pub(crate) pos: usize,
 }
 
 impl<'src> Dom<'src> {
-    /// Returns a [`TapeRef`] cursor at the root (entry 0), or `None` if the
+    /// Returns a [`DomRef`] cursor at the root (entry 0), or `None` if the
     /// tape is empty.
-    pub fn root<'t>(&'t self) -> Option<TapeRef<'t, 'src>> {
+    pub fn root<'t>(&'t self) -> Option<DomRef<'t, 'src>> {
         if self.entries.is_empty() {
             None
         } else {
-            Some(TapeRef {
+            Some(DomRef {
                 tape: &self.entries,
                 pos: 0,
             })
@@ -542,30 +542,30 @@ impl<'src> Dom<'src> {
 /// Advance past the entry at `pos`, returning the index of the next sibling.
 ///
 /// `StartObject(end)` / `StartArray(end)` jump over the entire subtree.
-pub(crate) fn tape_skip(entries: &[DomEntry<'_>], pos: usize) -> usize {
+pub(crate) fn dom_skip(entries: &[DomEntry<'_>], pos: usize) -> usize {
     let e = &entries[pos];
     match e.kind() {
-        TapeEntryKind::StartObject | TapeEntryKind::StartArray => e.payload() as usize + 1,
+        DomEntryKind::StartObject | DomEntryKind::StartArray => e.payload() as usize + 1,
         _ => pos + 1,
     }
 }
 
 // ---------------------------------------------------------------------------
-// TapeObjectIter / TapeArrayIter
+// DomObjectIter / DomArrayIter
 // ---------------------------------------------------------------------------
 
 /// Iterator over the key-value pairs of a JSON object in a [`Dom`].
 ///
-/// Yields `(&str, TapeRef)` pairs in document order.  Created by
-/// [`TapeRef::object_iter`].
-pub struct TapeObjectIter<'t, 'src: 't> {
+/// Yields `(&str, DomRef)` pairs in document order.  Created by
+/// [`DomRef::object_iter`].
+pub struct DomObjectIter<'t, 'src: 't> {
     tape: &'t [DomEntry<'src>],
     pos: usize,
     end: usize,
 }
 
-impl<'t, 'src: 't> Iterator for TapeObjectIter<'t, 'src> {
-    type Item = (&'t str, TapeRef<'t, 'src>);
+impl<'t, 'src: 't> Iterator for DomObjectIter<'t, 'src> {
+    type Item = (&'t str, DomRef<'t, 'src>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.end {
@@ -573,10 +573,10 @@ impl<'t, 'src: 't> Iterator for TapeObjectIter<'t, 'src> {
         }
         let key: &'t str = self.tape[self.pos].as_key()?;
         let val_pos = self.pos + 1;
-        self.pos = tape_skip(self.tape, val_pos);
+        self.pos = dom_skip(self.tape, val_pos);
         Some((
             key,
-            TapeRef {
+            DomRef {
                 tape: self.tape,
                 pos: val_pos,
             },
@@ -586,53 +586,53 @@ impl<'t, 'src: 't> Iterator for TapeObjectIter<'t, 'src> {
 
 /// Iterator over the elements of a JSON array in a [`Dom`].
 ///
-/// Yields one [`TapeRef`] per element in document order.  Created by
-/// [`TapeRef::array_iter`].
-pub struct TapeArrayIter<'t, 'src: 't> {
+/// Yields one [`DomRef`] per element in document order.  Created by
+/// [`DomRef::array_iter`].
+pub struct DomArrayIter<'t, 'src: 't> {
     tape: &'t [DomEntry<'src>],
     pos: usize,
     end: usize,
 }
 
-impl<'t, 'src: 't> Iterator for TapeArrayIter<'t, 'src> {
-    type Item = TapeRef<'t, 'src>;
+impl<'t, 'src: 't> Iterator for DomArrayIter<'t, 'src> {
+    type Item = DomRef<'t, 'src>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.end {
             return None;
         }
-        let item = TapeRef {
+        let item = DomRef {
             tape: self.tape,
             pos: self.pos,
         };
-        self.pos = tape_skip(self.tape, self.pos);
+        self.pos = dom_skip(self.tape, self.pos);
         Some(item)
     }
 }
 
 // ---------------------------------------------------------------------------
-// TapeRef inherent methods
+// DomRef inherent methods
 // ---------------------------------------------------------------------------
 
-impl<'t, 'src: 't> TapeRef<'t, 'src> {
+impl<'t, 'src: 't> DomRef<'t, 'src> {
     /// Returns an iterator over the key-value pairs if this value is a JSON
     /// object, or `None` otherwise.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use asmjson::{parse_to_tape, JsonRef};
+    /// use asmjson::{parse_to_dom, JsonRef};
     ///
-    /// let tape = parse_to_tape(r#"{"a":1,"b":2}"#).unwrap();
+    /// let tape = parse_to_dom(r#"{"a":1,"b":2}"#).unwrap();
     /// let root = tape.root().unwrap();
     /// for (key, val) in root.object_iter().unwrap() {
     ///     println!("{key}: {}", val.as_number_str().unwrap());
     /// }
     /// ```
-    pub fn object_iter(self) -> Option<TapeObjectIter<'t, 'src>> {
+    pub fn object_iter(self) -> Option<DomObjectIter<'t, 'src>> {
         self.tape[self.pos]
             .as_start_object()
-            .map(|end| TapeObjectIter {
+            .map(|end| DomObjectIter {
                 tape: self.tape,
                 pos: self.pos + 1,
                 end,
@@ -645,18 +645,18 @@ impl<'t, 'src: 't> TapeRef<'t, 'src> {
     /// # Example
     ///
     /// ```rust
-    /// use asmjson::{parse_to_tape, JsonRef};
+    /// use asmjson::{parse_to_dom, JsonRef};
     ///
-    /// let tape = parse_to_tape(r#"[1,2,3]"#).unwrap();
+    /// let tape = parse_to_dom(r#"[1,2,3]"#).unwrap();
     /// let root = tape.root().unwrap();
     /// for elem in root.array_iter().unwrap() {
     ///     println!("{}", elem.as_number_str().unwrap());
     /// }
     /// ```
-    pub fn array_iter(self) -> Option<TapeArrayIter<'t, 'src>> {
+    pub fn array_iter(self) -> Option<DomArrayIter<'t, 'src>> {
         self.tape[self.pos]
             .as_start_array()
-            .map(|end| TapeArrayIter {
+            .map(|end| DomArrayIter {
                 tape: self.tape,
                 pos: self.pos + 1,
                 end,
@@ -670,12 +670,12 @@ impl<'t, 'src: 't> TapeRef<'t, 'src> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{JsonRef, parse_to_tape};
+    use crate::{JsonRef, parse_to_dom};
 
     use super::{Dom, DomEntry};
 
     fn run_tape(json: &'static str) -> Option<Dom<'static>> {
-        parse_to_tape(json)
+        parse_to_dom(json)
     }
 
     fn te_str(s: &'static str) -> DomEntry<'static> {
@@ -832,7 +832,7 @@ mod tests {
         assert_eq!(pairs[2].0, "z");
         assert_eq!(pairs[2].1, (None, None, Some("hi")));
         // Non-object returns None.
-        let at = parse_to_tape("[1]").unwrap();
+        let at = parse_to_dom("[1]").unwrap();
         assert!(at.root().unwrap().object_iter().is_none());
     }
 
@@ -853,7 +853,7 @@ mod tests {
         assert!(nelems[0].is_array());
         assert!(nelems[1].is_object());
         // Non-array returns None.
-        let ot = parse_to_tape(r#"{"a":1}"#).unwrap();
+        let ot = parse_to_dom(r#"{"a":1}"#).unwrap();
         assert!(ot.root().unwrap().array_iter().is_none());
     }
 }

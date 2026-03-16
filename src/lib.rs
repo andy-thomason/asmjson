@@ -8,10 +8,10 @@ pub mod sax;
 #[cfg(feature = "serde")]
 pub use de::from_taperef;
 pub use dom::json_ref::JsonRef;
-pub use dom::{Dom, DomEntry, TapeArrayIter, TapeEntryKind, TapeObjectIter, TapeRef};
+pub use dom::{Dom, DomArrayIter, DomEntry, DomEntryKind, DomObjectIter, DomRef};
 pub use sax::Sax;
 
-use dom::TapeWriter;
+use dom::DomWriter;
 
 // ---------------------------------------------------------------------------
 // Hand-written x86-64 AVX-512BW assembly parser (direct-threading, C vtable)
@@ -198,11 +198,11 @@ fn build_zmm_vtab<W: WriterForZmm>() -> ZmmVtab {
 #[cfg(target_arch = "x86_64")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    /// Entry point assembled from `asm/x86_64/parse_json_zmm_dyn.S`.
+    /// Entry point assembled from `asm/x86_64/parse_json_zmm_sax.S`.
     ///
     /// Calls writer methods through the supplied `ZmmVtab`.  Does NOT call
     /// `finish`.  Returns `true` on success.
-    fn parse_json_zmm_dyn(
+    fn parse_json_zmm_sax(
         src_ptr: *const u8,
         src_len: usize,
         writer_data: *mut (),
@@ -211,7 +211,7 @@ unsafe extern "C" {
         unescape_buf: *mut String,
     ) -> bool;
 
-    /// Entry point assembled from `asm/x86_64/parse_json_zmm_tape.S`.
+    /// Entry point assembled from `asm/x86_64/parse_json_zmm_dom.S`.
     ///
     /// Writes [`DomEntry`] values directly into the pre-allocated `tape_ptr`
     /// array (up to `tape_cap` entries).  On success sets `*tape_len_out` to
@@ -219,7 +219,7 @@ unsafe extern "C" {
     /// `*has_escapes_out` to `true` if any `EscapedString` or `EscapedKey`
     /// entry was written.  Returns `RESULT_PARSE_ERROR` (1) for invalid JSON
     /// or `RESULT_TAPE_OVERFLOW` (2) if `tape_cap` entries are not sufficient.
-    fn parse_json_zmm_tape(
+    fn parse_json_zmm_dom(
         src_ptr: *const u8,
         src_len: usize,
         tape_ptr: *mut DomEntry<'static>,
@@ -427,7 +427,7 @@ pub extern "C" fn is_valid_json_number_c(ptr: *const u8, len: usize) -> bool {
     is_valid_json_number(s)
 }
 
-/// Called from `parse_json_zmm_tape` to transfer the decoded escape buffer
+/// Called from `parse_json_zmm_dom` to transfer the decoded escape buffer
 /// to a heap-allocated `Box<str>`.
 ///
 /// After `unescape_str` fills `*unescape_buf` with the decoded text, this
@@ -439,7 +439,7 @@ pub extern "C" fn is_valid_json_number_c(ptr: *const u8, len: usize) -> bool {
 #[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
 #[inline(never)]
-pub extern "C" fn tape_take_box_str(
+pub extern "C" fn dom_take_box_str(
     unescape_buf: *mut String,
     out_ptr: *mut *const u8,
     out_len: *mut usize,
@@ -489,17 +489,17 @@ fn write_atom<'a, W: Sax<'a>>(s: &'a str, w: &mut W) -> bool {
 ///
 /// `StartObject(n)` / `StartArray(n)` entries carry the index of the matching
 /// closer so entire subtrees can be skipped in O(1).  Access the tape via
-/// [`Dom::root`] which returns a [`TapeRef`] cursor that implements [`JsonRef`].
+/// [`Dom::root`] which returns a [`DomRef`] cursor that implements [`JsonRef`].
 ///
-/// For maximum throughput on CPUs with AVX-512BW, use [`parse_to_tape_zmm`].
+/// For maximum throughput on CPUs with AVX-512BW, use [`parse_to_dom_zmm`].
 ///
 /// ```rust
-/// use asmjson::{parse_to_tape, JsonRef};
-/// let tape = parse_to_tape(r#"{"x":1}"#).unwrap();
+/// use asmjson::{parse_to_dom, JsonRef};
+/// let tape = parse_to_dom(r#"{"x":1}"#).unwrap();
 /// assert_eq!(tape.root().get("x").as_i64(), Some(1));
 /// ```
-pub fn parse_to_tape<'a>(src: &'a str) -> Option<Dom<'a>> {
-    parse_with(src, TapeWriter::new())
+pub fn parse_to_dom<'a>(src: &'a str) -> Option<Dom<'a>> {
+    parse_with(src, DomWriter::new())
 }
 
 /// Parse `src` to a [`Dom`] using the hand-written x86-64 AVX-512BW
@@ -520,19 +520,19 @@ pub fn parse_to_tape<'a>(src: &'a str) -> Option<Dom<'a>> {
 ///
 /// The caller must ensure the CPU supports AVX-512BW.  Invoking this on a CPU
 /// without AVX-512BW support will trigger an illegal instruction fault.  Use
-/// [`parse_to_tape`] for portable code.
+/// [`parse_to_dom`] for portable code.
 ///
 /// ```rust
 /// #[cfg(target_arch = "x86_64")]
 /// {
-///     use asmjson::parse_to_tape_zmm;
-///     let tape = unsafe { parse_to_tape_zmm(r#"{"x":1}"#, None) }.unwrap();
+///     use asmjson::parse_to_dom_zmm;
+///     let tape = unsafe { parse_to_dom_zmm(r#"{"x":1}"#, None) }.unwrap();
 ///     use asmjson::JsonRef;
 ///     assert_eq!(tape.root().get("x").as_i64(), Some(1));
 /// }
 /// ```
 #[cfg(target_arch = "x86_64")]
-pub unsafe fn parse_to_tape_zmm<'a>(
+pub unsafe fn parse_to_dom_zmm<'a>(
     src: &'a str,
     initial_capacity: Option<usize>,
 ) -> Option<Dom<'a>> {
@@ -565,10 +565,10 @@ pub unsafe fn parse_to_tape_zmm<'a>(
         //   • `src` lives for at least `'a`; string pointers stored in tape
         //     entries point into `src`'s bytes and remain valid for `'a`.
         //   • EscapedString / EscapedKey entries own a `Box<str>` allocated by
-        //     `tape_take_box_str`; `DomEntry::drop` frees them.
-        //   • `parse_json_zmm_tape` does NOT call `finish`.
+        //     `dom_take_box_str`; `DomEntry::drop` frees them.
+        //   • `parse_json_zmm_dom` does NOT call `finish`.
         let result = unsafe {
-            parse_json_zmm_tape(
+            parse_json_zmm_dom(
                 src.as_ptr(),
                 src.len(),
                 tape_ptr,
@@ -637,7 +637,7 @@ pub fn parse_with<'a, W: Sax<'a>>(src: &'a str, writer: W) -> Option<W::Output> 
 /// containing backslash sequences (e.g. `\"`, `\n`, `\u0041`) or top-level
 /// scalars / strings will not be parsed correctly.  Only pass backslash-free
 /// JSON objects or arrays.  For full JSON support use [`parse_with`] or
-/// [`parse_to_tape_zmm`].
+/// [`parse_to_dom_zmm`].
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn parse_with_zmm<'a, W: Sax<'a>>(src: &'a str, mut writer: W) -> Option<W::Output> {
     let vtab = build_zmm_vtab::<W>();
@@ -645,9 +645,9 @@ pub unsafe fn parse_with_zmm<'a, W: Sax<'a>>(src: &'a str, mut writer: W) -> Opt
     let mut unescape_buf = String::new();
     // SAFETY (caller obligation): CPU supports AVX-512BW.
     // SAFETY (internal): writer and src both live for 'a, outlasting this
-    // synchronous call.  parse_json_zmm_dyn does NOT call finish.
+    // synchronous call.  parse_json_zmm_sax does NOT call finish.
     let ok = unsafe {
-        parse_json_zmm_dyn(
+        parse_json_zmm_sax(
             src.as_ptr(),
             src.len(),
             &raw mut writer as *mut (),
@@ -1265,14 +1265,14 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // zmm_tape correctness: compare parse_to_tape_zmm against the Rust
+    // zmm_tape correctness: compare parse_to_dom_zmm against the Rust
     // reference parser across a range of JSON inputs.
     // -----------------------------------------------------------------------
 
     #[cfg(target_arch = "x86_64")]
-    fn zmm_tape_matches_dyn(src: &str) {
-        let ref_tape = parse_to_tape(src).unwrap_or_else(|| panic!("reference rejected: {src:?}"));
-        let asm_tape = unsafe { parse_to_tape_zmm(src, None) }
+    fn zmm_dom_matches(src: &str) {
+        let ref_tape = parse_to_dom(src).unwrap_or_else(|| panic!("reference rejected: {src:?}"));
+        let asm_tape = unsafe { parse_to_dom_zmm(src, None) }
             .unwrap_or_else(|| panic!("zmm_tape rejected: {src:?}"));
         assert_eq!(
             ref_tape.entries, asm_tape.entries,
@@ -1281,16 +1281,16 @@ mod tests {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn zmm_tape_rejects(src: &str) {
+    fn zmm_dom_rejects(src: &str) {
         assert!(
-            unsafe { parse_to_tape_zmm(src, None) }.is_none(),
+            unsafe { parse_to_dom_zmm(src, None) }.is_none(),
             "zmm_tape should reject {src:?}"
         );
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_atoms() {
+    fn zmm_dom_atoms() {
         for src in &[
             "null",
             "true",
@@ -1313,13 +1313,13 @@ mod tests {
             // Integers just beyond 8 bytes (validator path)
             "123456789",
         ] {
-            zmm_tape_matches_dyn(src);
+            zmm_dom_matches(src);
         }
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_strings() {
+    fn zmm_dom_strings() {
         for src in &[
             r#""hello""#,
             r#""""#,
@@ -1329,80 +1329,80 @@ mod tests {
             r#""\u0000""#,
             r#""surrogate \uD83D\uDE00""#,
         ] {
-            zmm_tape_matches_dyn(src);
+            zmm_dom_matches(src);
         }
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_simple_object() {
-        zmm_tape_matches_dyn(r#"{"x":1}"#);
-        zmm_tape_matches_dyn(r#"{"a":1,"b":2,"c":3}"#);
-        zmm_tape_matches_dyn(r#"{}"#);
+    fn zmm_dom_simple_object() {
+        zmm_dom_matches(r#"{"x":1}"#);
+        zmm_dom_matches(r#"{"a":1,"b":2,"c":3}"#);
+        zmm_dom_matches(r#"{}"#);
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_simple_array() {
-        zmm_tape_matches_dyn(r#"[1,2,3]"#);
-        zmm_tape_matches_dyn(r#"[]"#);
-        zmm_tape_matches_dyn(r#"[null,true,false,"x",42]"#);
+    fn zmm_dom_simple_array() {
+        zmm_dom_matches(r#"[1,2,3]"#);
+        zmm_dom_matches(r#"[]"#);
+        zmm_dom_matches(r#"[null,true,false,"x",42]"#);
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_nested() {
-        zmm_tape_matches_dyn(r#"{"a":{"b":[1,true,null]}}"#);
-        zmm_tape_matches_dyn(r#"[[1,[2,[3]]]]"#);
-        zmm_tape_matches_dyn(r#"{"k":{"k":{"k":{}}}}"#);
-        zmm_tape_matches_dyn(r#"[{"a":1},{"b":2}]"#);
+    fn zmm_dom_nested() {
+        zmm_dom_matches(r#"{"a":{"b":[1,true,null]}}"#);
+        zmm_dom_matches(r#"[[1,[2,[3]]]]"#);
+        zmm_dom_matches(r#"{"k":{"k":{"k":{}}}}"#);
+        zmm_dom_matches(r#"[{"a":1},{"b":2}]"#);
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_escaped_keys() {
-        zmm_tape_matches_dyn(r#"{"key\nname":1}"#);
-        zmm_tape_matches_dyn(r#"{"key\u0041":true}"#);
-        zmm_tape_matches_dyn(r#"{"a\"b":null}"#);
+    fn zmm_dom_escaped_keys() {
+        zmm_dom_matches(r#"{"key\nname":1}"#);
+        zmm_dom_matches(r#"{"key\u0041":true}"#);
+        zmm_dom_matches(r#"{"a\"b":null}"#);
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_whitespace() {
-        zmm_tape_matches_dyn("  { \"x\" : 1 }  ");
-        zmm_tape_matches_dyn("[ 1 , 2 , 3 ]");
-        zmm_tape_matches_dyn("\t\r\nnull\t\r\n");
+    fn zmm_dom_whitespace() {
+        zmm_dom_matches("  { \"x\" : 1 }  ");
+        zmm_dom_matches("[ 1 , 2 , 3 ]");
+        zmm_dom_matches("\t\r\nnull\t\r\n");
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_long_string() {
+    fn zmm_dom_long_string() {
         // String that spans more than one 64-byte chunk.
         let long = format!(r#""{}""#, "a".repeat(200));
-        zmm_tape_matches_dyn(&long);
+        zmm_dom_matches(&long);
         let long_esc = format!(r#""{}\n{}""#, "b".repeat(100), "c".repeat(100));
-        zmm_tape_matches_dyn(&long_esc);
+        zmm_dom_matches(&long_esc);
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_reject_invalid() {
-        zmm_tape_rejects("");
-        zmm_tape_rejects("{");
-        zmm_tape_rejects("[");
-        zmm_tape_rejects("}");
-        zmm_tape_rejects(r#"{"a":}"#);
-        zmm_tape_rejects(r#"{"a":1"#);
+    fn zmm_dom_reject_invalid() {
+        zmm_dom_rejects("");
+        zmm_dom_rejects("{");
+        zmm_dom_rejects("[");
+        zmm_dom_rejects("}");
+        zmm_dom_rejects(r#"{"a":}"#);
+        zmm_dom_rejects(r#"{"a":1"#);
         // Leading zeros must be rejected (SWAR fast path must not bypass this).
-        zmm_tape_rejects("01");
-        zmm_tape_rejects("00");
-        zmm_tape_rejects("007");
-        zmm_tape_rejects("01234567"); // exactly 8 bytes, leading zero
+        zmm_dom_rejects("01");
+        zmm_dom_rejects("00");
+        zmm_dom_rejects("007");
+        zmm_dom_rejects("01234567"); // exactly 8 bytes, leading zero
     }
 
     #[cfg(target_arch = "x86_64")]
     #[test]
-    fn zmm_tape_overflow_retry() {
+    fn zmm_dom_overflow_retry() {
         // A 200-element array of objects produces ~800+ tape entries.
         // Initial capacity is src.len()/4 which is far smaller, so the
         // function must handle at least one TapeOverflow retry automatically.
@@ -1419,7 +1419,7 @@ mod tests {
         };
         // Use Some(4) to guarantee at least one overflow retry regardless of input size.
         let tape =
-            unsafe { parse_to_tape_zmm(&big, Some(4)) }.expect("overflow retry should succeed");
+            unsafe { parse_to_dom_zmm(&big, Some(4)) }.expect("overflow retry should succeed");
         assert_eq!(tape.root().unwrap().array_iter().unwrap().count(), 200);
     }
 }
