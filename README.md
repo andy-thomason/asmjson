@@ -115,22 +115,28 @@ for a fair comparison because sonic-rs defers decoding string content until the
 value is accessed (lazy evaluation); a parse-only measurement would undercount
 its work relative to any real use-case where the parsed data is actually read.
 
+Note: simd-json requires a mutable copy of the input buffer to parse in-place,
+so each iteration includes a `Vec::clone` of the 10 MiB dataset; it does not
+start on a level footing with the other parsers on these workloads.
+
 | Parser               | string array | string object | mixed      |
 |----------------------|:------------:|:-------------:|:----------:|
-| asmjson zmm tape     | 10.81 GiB/s  | 7.15 GiB/s    | 905 MiB/s  |
-| asmjson zmm          | 8.64 GiB/s   | 6.27 GiB/s    | 672 MiB/s  |
-| sonic-rs             | 7.11 GiB/s   | 4.04 GiB/s    | 475 MiB/s  |
-| asmjson u64          | 7.10 GiB/s   | 4.93 GiB/s    | 636 MiB/s  |
-| serde_json           | 2.43 GiB/s   | 535 MiB/s     | 83 MiB/s   |
+| asmjson zmm dyn      | 10.93 GiB/s  | 7.50 GiB/s    | 655 MiB/s  |
+| asmjson zmm tape     | 10.75 GiB/s  | 7.10 GiB/s    | 920 MiB/s  |
+| asmjson zmm          | 8.39 GiB/s   | 6.16 GiB/s    | 640 MiB/s  |
+| sonic-rs             | 7.05 GiB/s   | 4.05 GiB/s    | 483 MiB/s  |
+| asmjson u64          | 6.31 GiB/s   | 4.43 GiB/s    | 599 MiB/s  |
+| serde_json           | 2.41 GiB/s   | 539 MiB/s     | 83 MiB/s   |
+| simd-json †          | 1.94 GiB/s   | 1.20 GiB/s    | 175 MiB/s  |
 
-asmjson zmm tape leads across all three workloads.  It writes a flat
-`TapeEntry` array in the assembly parser itself — one pointer-sized entry per
-value — so structural traversal is a single linear scan with no pointer
-chasing.  The baseline asmjson zmm parser also leads on string-dominated
-workloads; the portable `u64` SWAR classifier is neck-and-neck with sonic-rs
-on string arrays despite using no SIMD instructions, and beats it on string
-objects.  sonic-rs narrows the gap on mixed JSON through its lazy string
-decoding, but zmm tape still leads by 90 %.
+† simd-json numbers include buffer cloning overhead (see note above).
+
+asmjson zmm dyn leads on string-dominated workloads; asmjson zmm tape leads on
+mixed JSON by a wide margin (920 MiB/s vs 483 MiB/s for sonic-rs — 90 % ahead).
+The zmm tape parser writes a flat `TapeEntry` array directly in assembly — one
+entry per value — so subsequent traversal is a single linear scan with no
+pointer chasing.  The portable `u64` SWAR classifier beats sonic-rs on string
+objects (4.43 vs 4.05 GiB/s) despite using no SIMD instructions.
 
 ## Conformance note
 
