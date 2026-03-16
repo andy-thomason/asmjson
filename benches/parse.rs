@@ -232,27 +232,20 @@ fn bench_string_array(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.bench_function("asmjson/zmm", |b| {
         b.iter(|| {
-            let tape = parse_to_tape(&data, classify_zmm).unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
-        });
-    });
-    #[cfg(target_arch = "x86_64")]
-    group.bench_function("asmjson/zmm_dyn", |b| {
-        b.iter(|| {
-            let tape = parse_to_tape_zmm_dyn(&data).unwrap();
+            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
     #[cfg(target_arch = "x86_64")]
     group.bench_function("asmjson/zmm_tape", |b| {
         b.iter(|| {
-            let tape = parse_to_tape_zmm_tape(&data, None).unwrap();
+            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
-            let tape = parse_to_tape(&data, classify_u64).unwrap();
+            let tape = parse_to_tape(&data).unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
