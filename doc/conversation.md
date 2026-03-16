@@ -1715,3 +1715,62 @@ call is synchronous and `src` outlives it.
 transparent to all existing tests).
 
 **Commit**: `0c5c260` feat: parse_with auto-dispatches to asm dyn when classify_zmm is used
+---
+
+## Session 20 — Drop ClassifyFn; four clean public entry points
+
+### What was done
+
+Removed the `ClassifyFn` type alias, `choose_classifier()`, and all `classify`
+parameters from the public API in response to user feedback: "Lets drop
+classifyfn and make the rust version always use the SWAR version. Have only
+four entrypoints to lib.rs: `parse_with()`, `parse_to_tape()`, `unsafe
+parse_with_zmm()`, `unsafe parse_to_tape_zmm()`. It is up to the user to make
+sure that the CPU supports avx512bw."
+
+Files changed: `src/lib.rs`, `src/tape.rs`, `src/json_ref.rs`, `src/de.rs`,
+`benches/parse.rs`, `examples/perf_zmm_tape.rs`, `README.md`.
+
+### Design decisions
+
+**Four entry points only.** The new surface area is:
+
+| Function | Safety | Classifier |
+|---|---|---|
+| `parse_to_tape(src)` | safe | SWAR (u64) |
+| `parse_with(src, writer)` | safe | SWAR (u64) |
+| `unsafe parse_to_tape_zmm(src, cap)` | unsafe | AVX-512BW asm |
+| `unsafe parse_with_zmm(src, writer)` | unsafe | AVX-512BW asm vtable |
+
+**Rust path always uses SWAR.** `parse_json_impl` had its `F: Fn(&[u8]) ->
+ByteState` generic parameter removed; it now calls `classify_u64` directly.
+This eliminates the abstraction cost of a function-pointer generic and the
+`choose_classifier` CPUID dance for the common case.
+
+**`unsafe` for AVX-512BW variants.** Rather than asserting at runtime (old
+`parse_to_tape_zmm_tape` panicked if the CPU lacked AVX-512BW), the two asm
+entry points are `unsafe fn`.  The assertion is removed; callers declare with
+`unsafe` that they have verified CPU support.  This aligns with Rust's
+philosophy and avoids hidden panics in libraries.
+
+**`parse_to_tape_zmm_dyn` removed.** Its functionality is now exposed through
+`parse_with_zmm`, which accepts any `JsonWriter<'a>`.  The vtable-dispatch asm
+path is accessible without requiring a public `TapeWriter` type.
+
+**`classify_ymm` / `classify_zmm` retained as `#[cfg(test)]`.** The
+`classifier_agreement` unit test exercises all three classifiers against each
+other to verify correctness.  Moving these to `#[cfg(test)]` suppresses dead
+code warnings while keeping the coverage.
+
+**`parse_with` no longer auto-dispatches to asm.** The previous session added
+logic to call `parse_json_zmm_dyn` automatically from `parse_with` when a
+`classify_zmm` argument was detected.  That heuristic is now gone: `parse_with`
+is purely the Rust SWAR path; the user explicitly calls `parse_with_zmm` for
+the asm path.
+
+### Results
+
+28 unit tests + 7 doc-tests pass (2 doc-tests now ignored due to platform/feature
+guards, net -2 from the 9 previously; no regressions).
+
+**Commit**: `c9a266b` refactor: drop ClassifyFn; four clean entry points with unsafe zmm variants
