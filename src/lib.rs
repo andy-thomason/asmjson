@@ -1,8 +1,12 @@
 #![doc = include_str!("../README.md")]
 
+#[cfg(feature = "serde")]
+pub mod de;
 pub mod json_ref;
 pub mod tape;
 
+#[cfg(feature = "serde")]
+pub use de::from_taperef;
 pub use json_ref::JsonRef;
 pub use tape::{Tape, TapeArrayIter, TapeEntry, TapeEntryKind, TapeObjectIter, TapeRef};
 

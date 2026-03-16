@@ -299,6 +299,18 @@ impl<'a> TapeEntry<'a> {
             _ => None,
         }
     }
+
+    /// For `String` entries: returns the text with the source-JSON lifetime `'a`,
+    /// enabling zero-copy deserialization.  Returns `None` for `EscapedString`
+    /// (heap-allocated) and for all non-string kinds.
+    #[inline]
+    pub(crate) fn source_string(&self) -> Option<&'a str> {
+        if self.kind() == TapeEntryKind::String {
+            Some(self.as_str_unchecked())
+        } else {
+            None
+        }
+    }
     /// Returns the key text if this is `Key` or `EscapedKey`, else `None`.
     #[inline]
     pub fn as_key(&self) -> Option<&str> {

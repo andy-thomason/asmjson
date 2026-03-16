@@ -12,8 +12,10 @@ categories = ["parsing", "encoding"]
 
 [features]
 stats = []
+serde = ["dep:serde"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 
 [build-dependencies]
 cc = "1"

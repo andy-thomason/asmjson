@@ -48,6 +48,7 @@ version = "0.1.7"
 dependencies = [
  "cc",
  "criterion",
+ "serde",
  "serde_json",
  "simd-json",
  "sonic-rs",
