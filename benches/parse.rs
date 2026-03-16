@@ -63,6 +63,21 @@ fn sonic_sum_lens(v: &sonic_rs::Value) -> usize {
     0
 }
 
+/// Recursively sum the lengths of every string value and object key in a
+/// simd-json BorrowedValue tree.
+fn simd_sum_lens(v: &simd_json::BorrowedValue<'_>) -> usize {
+    use simd_json::BorrowedValue;
+    match v {
+        BorrowedValue::String(s) => s.len(),
+        BorrowedValue::Object(map) => map
+            .iter()
+            .map(|(k, val)| k.len() + simd_sum_lens(val))
+            .sum(),
+        BorrowedValue::Array(arr) => arr.iter().map(simd_sum_lens).sum(),
+        _ => 0,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Stats helper — compiled in only with --features stats
 // ---------------------------------------------------------------------------
@@ -245,6 +260,13 @@ fn bench_string_array(c: &mut Criterion) {
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
+    group.bench_function("simd-json", |b| {
+        b.iter(|| {
+            let mut bytes = data.as_bytes().to_vec();
+            let v = simd_json::to_borrowed_value(&mut bytes).unwrap();
+            std::hint::black_box(simd_sum_lens(&v))
+        });
+    });
     group.bench_function("sonic-rs", |b| {
         b.iter(|| {
             let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
@@ -292,6 +314,13 @@ fn bench_string_object(c: &mut Criterion) {
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
+    group.bench_function("simd-json", |b| {
+        b.iter(|| {
+            let mut bytes = data.as_bytes().to_vec();
+            let v = simd_json::to_borrowed_value(&mut bytes).unwrap();
+            std::hint::black_box(simd_sum_lens(&v))
+        });
+    });
     group.bench_function("sonic-rs", |b| {
         b.iter(|| {
             let v = sonic_rs::from_str::<sonic_rs::Value>(&data).unwrap();
@@ -337,6 +366,13 @@ fn bench_mixed(c: &mut Criterion) {
         b.iter(|| {
             let tape = parse_to_tape(&data, classify_u64).unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
+        });
+    });
+    group.bench_function("simd-json", |b| {
+        b.iter(|| {
+            let mut bytes = data.as_bytes().to_vec();
+            let v = simd_json::to_borrowed_value(&mut bytes).unwrap();
+            std::hint::black_box(simd_sum_lens(&v))
         });
     });
     group.bench_function("sonic-rs", |b| {
