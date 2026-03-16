@@ -131,6 +131,11 @@ start on a level footing with the other parsers on these workloads.
 
 † simd-json numbers include buffer cloning overhead (see note above).
 
+Note: `asmjson zmm dyn` and `asmjson zmm tape` are implemented entirely in
+hand-written x86-64 assembly using AVX-512BW instructions.  They require a
+CPU with AVX-512BW support (Ice Lake or later on Intel, Zen 4 or later on AMD)
+and are not available on other architectures.
+
 asmjson zmm dyn leads on string-dominated workloads; asmjson zmm tape leads on
 mixed JSON by a wide margin (920 MiB/s vs 483 MiB/s for sonic-rs — 90 % ahead).
 The zmm tape parser writes a flat `TapeEntry` array directly in assembly — one
