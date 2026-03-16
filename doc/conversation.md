@@ -1101,3 +1101,72 @@ unit tests and 5 doctests pass; zero warnings.
 **Commit**: `e89f2fc` — refactor: replace TapeEntry enum with 16-byte repr(C) struct
 
 
+
+## Session 9 — direct-write assembly tape parser (`parse_json_zmm_tape`)
+
+### What was done
+
+Added `asm/x86_64/parse_json_zmm_tape.S`, a new hand-written x86-64 AVX-512BW
+assembly parser that writes `TapeEntry` values directly into a pre-allocated
+array, bypassing all virtual dispatch overhead present in the existing `zmm_dyn`
+variant.  Supporting changes: `tape_take_box_str` C helper in `lib.rs`;
+`parse_json_zmm_tape` extern declaration; `parse_to_tape_zmm_tape` public
+function; `build.rs` and `benches/parse.rs` updated.  Nine new unit tests
+(27 total) verify correctness against the reference Rust parser.
+
+### Design decisions
+
+**Register map** — `rbx` holds `tape_len` live in a register (not spilled to
+memory) to avoid a load/store on every emitted token.  `r14` is `tape_ptr`
+(the base of the pre-allocated `TapeEntry` array), replacing the vtable
+pointer in `zmm_dyn`.  `r15` is `frames_buf` (frame-kind stack), and `r12`/`r13`
+are `src_base`/`src_end` as before.
+
+**Inline writes** — instead of calling 11 vtable slots, each token type is
+written inline:
+```asm
+lea  rax, [rbx + rbx]
+lea  rax, [r14 + rax*8]   ; tape_ptr + tape_len*16
+; fill tag_payload and ptr fields ...
+inc  rbx                   ; tape_len++
+```
+
+**`open_buf`** — a separate `[u64; 64]` array holds the tape index of each
+pending `StartObject`/`StartArray`.  On the matching `}` or `]`, the start
+entry's `payload` field is back-patched with the end index.
+
+**`tape_take_box_str`** — a `#[no_mangle] extern "C"` Rust helper converts
+the `unescape_buf` `String` into a leaked `Box<str>`, writing the raw pointer
+and length to out-params.  The assembly calls this for every escaped string or
+key, then writes an `EscapedString`/`EscapedKey` `TapeEntry` that owns the box.
+
+**Pre-allocation** — `parse_to_tape_zmm_tape` reserves `src.len() + 2`
+entries before calling the assembly; this is always sufficient for valid JSON
+(at most one token per input byte) so no reallocation occurs during parsing.
+
+### Bug fixes discovered during testing
+
+Two bugs found while adding correctness tests:
+
+1. **String-at-chunk-boundary EOF failure** — when a string's closing `"` fell
+   exactly at a 64-byte chunk boundary, the code set `r11 = .Lerror_from_r11`
+   and jumped to `chunk_fetch` with `r10 = .Lafter_value`.  On the following
+   `chunk_fetch` the source was exhausted, so `r11` was invoked and the parse
+   failed even for a valid top-level string.  Fix: set `r11 = .Leof_after_value`
+   in the string and escaped-string emit paths before the chunk-boundary
+   fallthrough.
+
+2. **Empty input accepted** — `.Leof_after_value` checked only `frames_depth == 0`
+   before reporting success, so empty input (`""`) returned `Ok` with an empty
+   tape.  Fix: added `test rbx, rbx; jz .Lerror` to reject zero-token output.
+
+### Results
+
+All 27 unit tests pass; all 6 doctests pass (3 ignored).  The implementation
+is compiled and linked via `cc::Build` in `build.rs` alongside the existing
+`parse_json_zmm_dyn.S`.  Correctness is validated by comparing `TapeEntry`
+slices against the reference Rust parser across atoms, plain strings, escaped
+strings, long strings (>64 bytes), nested structures, escaped keys, whitespace
+variants, and rejection of malformed inputs.
+
+**Commit**: `84bb057` — feat: add parse_to_tape_zmm_tape direct-write assembly parser

@@ -117,6 +117,21 @@ unsafe extern "C" {
         frames_buf: *mut u8,
         unescape_buf: *mut String,
     ) -> bool;
+
+    /// Entry point assembled from `asm/x86_64/parse_json_zmm_tape.S`.
+    ///
+    /// Writes [`TapeEntry`] values directly into the pre-allocated `tape_ptr`
+    /// array.  On success sets `*tape_len_out` to the number of entries written
+    /// and returns `true`.
+    fn parse_json_zmm_tape(
+        src_ptr: *const u8,
+        src_len: usize,
+        tape_ptr: *mut TapeEntry<'static>,
+        tape_len_out: *mut usize,
+        frames_buf: *mut u8,
+        open_buf: *mut u64,
+        unescape_buf: *mut String,
+    ) -> bool;
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +369,33 @@ pub extern "C" fn is_valid_json_number_c(ptr: *const u8, len: usize) -> bool {
     is_valid_json_number(s)
 }
 
+/// Called from `parse_json_zmm_tape` to transfer the decoded escape buffer
+/// to a heap-allocated `Box<str>`.
+///
+/// After `unescape_str` fills `*unescape_buf` with the decoded text, this
+/// function moves that `String` into a `Box<str>` (reallocating to trim
+/// excess capacity), writes the data pointer and length to `*out_ptr` /
+/// `*out_len`, then **leaks** the box.  Ownership is transferred to the
+/// `TapeEntry` written immediately after this call, which will free it on
+/// `Drop`.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub extern "C" fn tape_take_box_str(
+    unescape_buf: *mut String,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) {
+    unsafe {
+        let s = std::mem::replace(&mut *unescape_buf, String::new());
+        let boxed: Box<str> = s.into_boxed_str();
+        let len = boxed.len();
+        let raw: *mut str = Box::into_raw(boxed);
+        *out_ptr = raw as *mut u8 as *const u8;
+        *out_len = len;
+    }
+}
+
 fn write_atom<'a, W: JsonWriter<'a>>(s: &'a str, w: &mut W) -> bool {
     match s {
         "true" => {
@@ -460,6 +502,66 @@ pub fn parse_to_tape_zmm_dyn<'a>(src: &'a str) -> Option<Tape<'a>> {
     };
 
     if ok { writer.finish() } else { None }
+}
+
+/// Parse `src` to a [`Tape`] using the hand-written x86-64 AVX-512BW
+/// assembly parser that writes [`TapeEntry`] values directly into a
+/// pre-allocated array, bypassing all virtual dispatch.
+///
+/// The tape array is pre-allocated with `src.len() + 2` entries — sufficient
+/// for any valid JSON — so no reallocation occurs during parsing.
+///
+/// Only available on `x86_64` targets.  Returns `None` if the JSON is
+/// invalid or nesting exceeds [`MAX_JSON_DEPTH`] levels.
+///
+/// ```rust
+/// #[cfg(target_arch = "x86_64")]
+/// {
+///     use asmjson::parse_to_tape_zmm_tape;
+///     let tape = parse_to_tape_zmm_tape(r#"{"x":1}"#).unwrap();
+///     use asmjson::JsonRef;
+///     assert_eq!(tape.root().get("x").as_i64(), Some(1));
+/// }
+/// ```
+#[cfg(target_arch = "x86_64")]
+pub fn parse_to_tape_zmm_tape<'a>(src: &'a str) -> Option<Tape<'a>> {
+    let capacity = src.len() + 2;
+    let mut tape_data: Vec<TapeEntry<'a>> = Vec::with_capacity(capacity);
+    let tape_ptr = tape_data.as_mut_ptr() as *mut TapeEntry<'static>;
+
+    let mut frames_buf = [FrameKind::Object; MAX_JSON_DEPTH];
+    let mut open_buf = [0u64; MAX_JSON_DEPTH];
+    let mut unescape_buf = String::new();
+    let mut tape_len: usize = 0;
+
+    // SAFETY:
+    //   • `tape_data` has capacity `src.len() + 2`, which is always enough
+    //     for any valid JSON source (one token per byte at most, plus two
+    //     extra).  The assembly never writes beyond index `tape_len - 1`.
+    //   • `src` lives for at least `'a`; string pointers stored in tape
+    //     entries point into `src`'s bytes and remain valid for `'a`.
+    //   • EscapedString / EscapedKey entries own a `Box<str>` allocated by
+    //     `tape_take_box_str`; `TapeEntry::drop` frees them.
+    //   • `parse_json_zmm_tape` does NOT call `finish`.
+    let ok = unsafe {
+        parse_json_zmm_tape(
+            src.as_ptr(),
+            src.len(),
+            tape_ptr,
+            &raw mut tape_len,
+            frames_buf.as_mut_ptr() as *mut u8,
+            open_buf.as_mut_ptr(),
+            &raw mut unescape_buf,
+        )
+    };
+
+    if ok {
+        // SAFETY: assembly wrote exactly `tape_len` initialised entries.
+        unsafe { tape_data.set_len(tape_len) };
+        Some(Tape { entries: tape_data })
+    } else {
+        None
+    }
 }
 
 /// Parse `src` using a custom [`JsonWriter`], returning its output.
@@ -1357,5 +1459,120 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // zmm_tape correctness: compare parse_to_tape_zmm_tape against
+    // parse_to_tape_zmm_dyn across a range of JSON inputs.
+    // -----------------------------------------------------------------------
+
+    #[cfg(target_arch = "x86_64")]
+    fn zmm_tape_matches_dyn(src: &str) {
+        // Use the Rust reference parser as the oracle (zmm_dyn does not
+        // support top-level scalars, but the tape variant does).
+        let ref_tape = parse_to_tape(src, classify_zmm)
+            .unwrap_or_else(|| panic!("reference rejected: {src:?}"));
+        let asm_tape =
+            parse_to_tape_zmm_tape(src).unwrap_or_else(|| panic!("zmm_tape rejected: {src:?}"));
+        assert_eq!(
+            ref_tape.entries, asm_tape.entries,
+            "tape mismatch for {src:?}"
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn zmm_tape_rejects(src: &str) {
+        assert!(
+            parse_to_tape_zmm_tape(src).is_none(),
+            "zmm_tape should reject {src:?}"
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_atoms() {
+        for src in &[
+            "null", "true", "false", "0", "42", "-7", "3.14", "1e10", "-0.5e-3",
+        ] {
+            zmm_tape_matches_dyn(src);
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_strings() {
+        for src in &[
+            r#""hello""#,
+            r#""""#,
+            r#""with \"escape\"""#,
+            r#""newline\nand\ttab""#,
+            r#""\u0041\u0042\u0043""#,
+            r#""\u0000""#,
+            r#""surrogate \uD83D\uDE00""#,
+        ] {
+            zmm_tape_matches_dyn(src);
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_simple_object() {
+        zmm_tape_matches_dyn(r#"{"x":1}"#);
+        zmm_tape_matches_dyn(r#"{"a":1,"b":2,"c":3}"#);
+        zmm_tape_matches_dyn(r#"{}"#);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_simple_array() {
+        zmm_tape_matches_dyn(r#"[1,2,3]"#);
+        zmm_tape_matches_dyn(r#"[]"#);
+        zmm_tape_matches_dyn(r#"[null,true,false,"x",42]"#);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_nested() {
+        zmm_tape_matches_dyn(r#"{"a":{"b":[1,true,null]}}"#);
+        zmm_tape_matches_dyn(r#"[[1,[2,[3]]]]"#);
+        zmm_tape_matches_dyn(r#"{"k":{"k":{"k":{}}}}"#);
+        zmm_tape_matches_dyn(r#"[{"a":1},{"b":2}]"#);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_escaped_keys() {
+        zmm_tape_matches_dyn(r#"{"key\nname":1}"#);
+        zmm_tape_matches_dyn(r#"{"key\u0041":true}"#);
+        zmm_tape_matches_dyn(r#"{"a\"b":null}"#);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_whitespace() {
+        zmm_tape_matches_dyn("  { \"x\" : 1 }  ");
+        zmm_tape_matches_dyn("[ 1 , 2 , 3 ]");
+        zmm_tape_matches_dyn("\t\r\nnull\t\r\n");
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_long_string() {
+        // String that spans more than one 64-byte chunk.
+        let long = format!(r#""{}""#, "a".repeat(200));
+        zmm_tape_matches_dyn(&long);
+        let long_esc = format!(r#""{}\n{}""#, "b".repeat(100), "c".repeat(100));
+        zmm_tape_matches_dyn(&long_esc);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn zmm_tape_reject_invalid() {
+        zmm_tape_rejects("");
+        zmm_tape_rejects("{");
+        zmm_tape_rejects("[");
+        zmm_tape_rejects("}");
+        zmm_tape_rejects(r#"{"a":}"#);
+        zmm_tape_rejects(r#"{"a":1"#);
     }
 }
