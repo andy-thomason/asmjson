@@ -516,6 +516,11 @@ pub fn parse_to_tape_zmm_dyn<'a>(src: &'a str) -> Option<Tape<'a>> {
 /// Only available on `x86_64` targets.  Returns `None` if the JSON is
 /// invalid or nesting exceeds [`MAX_JSON_DEPTH`] levels.
 ///
+/// # Panics
+///
+/// Panics at runtime if the CPU does not support AVX-512BW.  For automatic
+/// ISA dispatch use [`parse_to_tape`] with [`choose_classifier`].
+///
 /// ```rust
 /// #[cfg(target_arch = "x86_64")]
 /// {
@@ -527,6 +532,11 @@ pub fn parse_to_tape_zmm_dyn<'a>(src: &'a str) -> Option<Tape<'a>> {
 /// ```
 #[cfg(target_arch = "x86_64")]
 pub fn parse_to_tape_zmm_tape<'a>(src: &'a str) -> Option<Tape<'a>> {
+    assert!(
+        std::is_x86_feature_detected!("avx512bw"),
+        "parse_to_tape_zmm_tape requires AVX-512BW; \
+         use parse_to_tape or choose_classifier() for automatic dispatch"
+    );
     let capacity = src.len() + 2;
     let mut tape_data: Vec<TapeEntry<'a>> = Vec::with_capacity(capacity);
     let tape_ptr = tape_data.as_mut_ptr() as *mut TapeEntry<'static>;
