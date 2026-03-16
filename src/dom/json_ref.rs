@@ -11,7 +11,7 @@ use super::{TapeEntryKind, TapeRef, tape_skip};
 /// least `'a`.
 ///
 /// Implemented by:
-/// - [`TapeRef<'a, _>`] — lightweight cursor into a flat [`super::Tape`].
+/// - [`TapeRef<'a, _>`] — lightweight cursor into a flat [`super::Dom`].
 /// - `Option<J>` where `J: JsonRef<'a>` — transparent wrapper enabling chaining
 ///   without intermediate `?` or `.and_then`: `root.get("a").get("b").as_str()`.
 pub trait JsonRef<'a>: Sized + Copy {
@@ -249,12 +249,12 @@ impl<'a, J: JsonRef<'a>> JsonRef<'a> for Option<J> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Tape;
+    use super::super::Dom;
     use crate::parse_to_tape;
 
     use super::JsonRef;
 
-    fn run_tape(json: &'static str) -> Option<Tape<'static>> {
+    fn run_tape(json: &'static str) -> Option<Dom<'static>> {
         parse_to_tape(json)
     }
 

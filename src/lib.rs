@@ -8,7 +8,7 @@ pub mod sax;
 #[cfg(feature = "serde")]
 pub use de::from_taperef;
 pub use dom::json_ref::JsonRef;
-pub use dom::{Tape, TapeArrayIter, TapeEntry, TapeEntryKind, TapeObjectIter, TapeRef};
+pub use dom::{Dom, DomEntry, TapeArrayIter, TapeEntryKind, TapeObjectIter, TapeRef};
 pub use sax::Sax;
 
 use dom::TapeWriter;
@@ -213,7 +213,7 @@ unsafe extern "C" {
 
     /// Entry point assembled from `asm/x86_64/parse_json_zmm_tape.S`.
     ///
-    /// Writes [`TapeEntry`] values directly into the pre-allocated `tape_ptr`
+    /// Writes [`DomEntry`] values directly into the pre-allocated `tape_ptr`
     /// array (up to `tape_cap` entries).  On success sets `*tape_len_out` to
     /// the number of entries written and returns `RESULT_OK` (0).  Sets
     /// `*has_escapes_out` to `true` if any `EscapedString` or `EscapedKey`
@@ -222,7 +222,7 @@ unsafe extern "C" {
     fn parse_json_zmm_tape(
         src_ptr: *const u8,
         src_len: usize,
-        tape_ptr: *mut TapeEntry<'static>,
+        tape_ptr: *mut DomEntry<'static>,
         tape_len_out: *mut usize,
         frames_buf: *mut u8,
         open_buf: *mut u64,
@@ -434,7 +434,7 @@ pub extern "C" fn is_valid_json_number_c(ptr: *const u8, len: usize) -> bool {
 /// function moves that `String` into a `Box<str>` (reallocating to trim
 /// excess capacity), writes the data pointer and length to `*out_ptr` /
 /// `*out_len`, then **leaks** the box.  Ownership is transferred to the
-/// `TapeEntry` written immediately after this call, which will free it on
+/// `DomEntry` written immediately after this call, which will free it on
 /// `Drop`.
 #[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
@@ -483,13 +483,13 @@ fn write_atom<'a, W: Sax<'a>>(s: &'a str, w: &mut W) -> bool {
 // Public parse entry points
 // ---------------------------------------------------------------------------
 
-/// Parse `src` into a flat [`Tape`] using the portable SWAR classifier.
+/// Parse `src` into a flat [`Dom`] using the portable SWAR classifier.
 ///
 /// Returns `None` if the input is not valid JSON.
 ///
 /// `StartObject(n)` / `StartArray(n)` entries carry the index of the matching
 /// closer so entire subtrees can be skipped in O(1).  Access the tape via
-/// [`Tape::root`] which returns a [`TapeRef`] cursor that implements [`JsonRef`].
+/// [`Dom::root`] which returns a [`TapeRef`] cursor that implements [`JsonRef`].
 ///
 /// For maximum throughput on CPUs with AVX-512BW, use [`parse_to_tape_zmm`].
 ///
@@ -498,15 +498,15 @@ fn write_atom<'a, W: Sax<'a>>(s: &'a str, w: &mut W) -> bool {
 /// let tape = parse_to_tape(r#"{"x":1}"#).unwrap();
 /// assert_eq!(tape.root().get("x").as_i64(), Some(1));
 /// ```
-pub fn parse_to_tape<'a>(src: &'a str) -> Option<Tape<'a>> {
+pub fn parse_to_tape<'a>(src: &'a str) -> Option<Dom<'a>> {
     parse_with(src, TapeWriter::new())
 }
 
-/// Parse `src` to a [`Tape`] using the hand-written x86-64 AVX-512BW
-/// assembly parser that writes [`TapeEntry`] values directly into a
+/// Parse `src` to a [`Dom`] using the hand-written x86-64 AVX-512BW
+/// assembly parser that writes [`DomEntry`] values directly into a
 /// pre-allocated array, bypassing all virtual dispatch.
 ///
-/// `initial_capacity` controls how many [`TapeEntry`] slots the first
+/// `initial_capacity` controls how many [`DomEntry`] slots the first
 /// allocation reserves.  Pass `None` to use the default of `src.len() / 4`,
 /// which is large enough for well-formed JSON without triggering a retry on
 /// typical inputs.  Pass `Some(n)` to hint a known-good size and avoid any
@@ -535,7 +535,7 @@ pub fn parse_to_tape<'a>(src: &'a str) -> Option<Tape<'a>> {
 pub unsafe fn parse_to_tape_zmm<'a>(
     src: &'a str,
     initial_capacity: Option<usize>,
-) -> Option<Tape<'a>> {
+) -> Option<Dom<'a>> {
     // Result codes matching the assembly RESULT_* constants.
     const RESULT_OK: u8 = 0;
     const RESULT_PARSE_ERROR: u8 = 1;
@@ -552,8 +552,8 @@ pub unsafe fn parse_to_tape_zmm<'a>(
     let mut capacity = initial_capacity.unwrap_or_else(|| (src.len() / 4).max(2));
 
     loop {
-        let mut tape_data: Vec<TapeEntry<'a>> = Vec::with_capacity(capacity);
-        let tape_ptr = tape_data.as_mut_ptr() as *mut TapeEntry<'static>;
+        let mut tape_data: Vec<DomEntry<'a>> = Vec::with_capacity(capacity);
+        let tape_ptr = tape_data.as_mut_ptr() as *mut DomEntry<'static>;
         let mut tape_len: usize = 0;
         let mut has_escapes: bool = false;
         unescape_buf.clear();
@@ -565,7 +565,7 @@ pub unsafe fn parse_to_tape_zmm<'a>(
         //   • `src` lives for at least `'a`; string pointers stored in tape
         //     entries point into `src`'s bytes and remain valid for `'a`.
         //   • EscapedString / EscapedKey entries own a `Box<str>` allocated by
-        //     `tape_take_box_str`; `TapeEntry::drop` frees them.
+        //     `tape_take_box_str`; `DomEntry::drop` frees them.
         //   • `parse_json_zmm_tape` does NOT call `finish`.
         let result = unsafe {
             parse_json_zmm_tape(
@@ -585,7 +585,7 @@ pub unsafe fn parse_to_tape_zmm<'a>(
             RESULT_OK => {
                 // SAFETY: assembly wrote exactly `tape_len` initialised entries.
                 unsafe { tape_data.set_len(tape_len) };
-                return Some(Tape {
+                return Some(Dom {
                     entries: tape_data,
                     has_escapes,
                 });

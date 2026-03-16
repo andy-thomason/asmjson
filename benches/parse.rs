@@ -59,7 +59,7 @@ impl<'src> Sax<'src> for LenSumWriter {
 
 /// Sum the lengths of every String and Key entry in a tape.
 #[inline]
-fn tape_sum_lens(tape: &asmjson::Tape<'_>) -> usize {
+fn tape_sum_lens(tape: &asmjson::Dom<'_>) -> usize {
     tape.entries
         .iter()
         .map(|e| match e.kind() {

@@ -6,7 +6,7 @@
 ///
 /// Implement this trait to produce any output from a single pass over the JSON
 /// source.  The built-in implementation used by [`crate::parse_to_tape`]
-/// produces a flat [`crate::dom::Tape`].
+/// produces a flat [`crate::dom::Dom`].
 ///
 /// A custom implementation can be driven via [`crate::parse_with`] (portable
 /// SWAR) or [`crate::parse_with_zmm`] (AVX-512BW assembly).

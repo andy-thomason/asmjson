@@ -1877,3 +1877,25 @@ All tests pass (27 unit + doc-tests).  No regressions.  One pre-existing
 `dead_code` warning on `source_string` remains unchanged.
 
 **Commit**: `2640796` refactor: rename tape→dom, json_ref into dom, JsonWriter→Sax in sax module
+
+---
+
+## Session 24 — Rename Tape→Dom, TapeEntry→DomEntry
+
+### What was done
+
+All occurrences of `Tape` (the flat token array struct) were renamed to `Dom`,
+and all occurrences of `TapeEntry` (the 16-byte token struct) were renamed to
+`DomEntry` across the entire codebase.
+
+Files changed: `src/dom/mod.rs`, `src/lib.rs`, `src/dom/json_ref.rs`,
+`src/sax.rs`, `benches/parse.rs`.
+
+Unchanged names: `TapeRef`, `TapeWriter` (private), `TapeArrayIter`,
+`TapeObjectIter`, `TapeEntryKind`.
+
+### Results
+
+All 27 unit tests and 7 doc-tests pass.  No regressions.
+
+**Commit**: `f386977` refactor: rename Tape→Dom, TapeEntry→DomEntry
