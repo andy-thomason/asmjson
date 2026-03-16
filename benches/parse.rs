@@ -2,6 +2,8 @@
 use asmjson::choose_classifier;
 #[cfg(feature = "stats")]
 use asmjson::parse_to_tape as parse_json;
+#[cfg(target_arch = "x86_64")]
+use asmjson::parse_to_tape_zmm_dyn;
 #[cfg(feature = "stats")]
 use asmjson::stats;
 use asmjson::{TapeEntry, classify_u64, classify_zmm, parse_to_tape};
@@ -222,6 +224,13 @@ fn bench_string_array(c: &mut Criterion) {
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
+    #[cfg(target_arch = "x86_64")]
+    group.bench_function("asmjson/zmm_dyn", |b| {
+        b.iter(|| {
+            let tape = parse_to_tape_zmm_dyn(&data).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
+    });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
             let tape = parse_to_tape(&data, classify_u64).unwrap();
@@ -255,6 +264,13 @@ fn bench_string_object(c: &mut Criterion) {
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
+    #[cfg(target_arch = "x86_64")]
+    group.bench_function("asmjson/zmm_dyn", |b| {
+        b.iter(|| {
+            let tape = parse_to_tape_zmm_dyn(&data).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
+    });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
             let tape = parse_to_tape(&data, classify_u64).unwrap();
@@ -285,6 +301,13 @@ fn bench_mixed(c: &mut Criterion) {
     group.bench_function("asmjson/zmm", |b| {
         b.iter(|| {
             let tape = parse_to_tape(&data, classify_zmm).unwrap();
+            std::hint::black_box(tape_sum_lens(&tape))
+        });
+    });
+    #[cfg(target_arch = "x86_64")]
+    group.bench_function("asmjson/zmm_dyn", |b| {
+        b.iter(|| {
+            let tape = parse_to_tape_zmm_dyn(&data).unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
         });
     });
