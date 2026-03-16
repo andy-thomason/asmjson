@@ -1552,3 +1552,35 @@ builds a 200-element JSON array (~800+ tape entries), verifying that the
 capacity-doubling retry produces the correct result.
 
 **Commit**: `6c87ff4` feat: TapeOverflow error code with capacity-doubling retry
+
+## Session 18 — Optimisation tips in README
+
+### What was done
+
+Added an **Optimisation tips** section to `README.md` (between Quick start and
+Output formats) with two executable doc-test examples:
+
+1. **Cache field refs from a one-pass object scan** — shows iterating a root
+   object with `object_iter` once and storing the desired `TapeRef` values,
+   avoiding the repeated O(n_keys) re-scan that `get(key)` performs on each
+   call.
+
+2. **Collect array elements for indexed or multi-pass access** — shows
+   collecting `array_iter` results into a `Vec<TapeRef>`, giving O(1) random
+   access and free additional passes over the same data.
+
+### Design decisions
+
+`TapeRef` is `Copy` (two `usize` fields), so storing it is cheap and safe for
+the lifetime of the tape borrow.  The examples highlight this property
+explicitly so users understand that there is no heap cost to caching refs.
+
+The existing `Conformance note` section was added in the prior session; the new
+section was inserted between Quick start and Output formats where it is most
+visible to new users deciding how to traverse the parsed data.
+
+### Results
+
+28 unit tests + 8 doc-tests (including 2 new README examples) pass.
+
+**Commit**: `e9ce7d8` docs: add optimisation tips — caching TapeRefs from object/array iterators
