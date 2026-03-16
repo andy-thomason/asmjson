@@ -1054,3 +1054,50 @@ No changes were made to the vtable or trampoline design.  The benchmark baseline
 
 **Commit**: `6525c72` — bench: add asmjson/zmm_dyn to all three criterion groups
 
+---
+
+## Session 7 — Replace `TapeEntry` enum with a 16-byte `#[repr(C)]` struct
+
+### What was done
+
+Replaced the `pub enum TapeEntry<'a>` (whose Rust-enum representation was
+compiler-determined and varied by variant) with a fixed-size `#[repr(C)]
+pub struct TapeEntry<'a>` that is exactly **16 bytes** on all platforms:
+
+| word | offset | meaning |
+|------|--------|---------|
+| 0 | 0 | bits 63–60: `TapeEntryKind` discriminant (0–10); bits 27–0: string length **or** object/array end-index |
+| 1 | 8 | `*const u8` pointer to string bytes; null for non-string kinds |
+
+A companion `#[repr(u8)] pub enum TapeEntryKind` carries the fixed
+discriminants (Null=0, Bool=1, … EndArray=10).  These values are part of
+the public ABI that `parse_json_zmm_tape.S` will consume.
+
+For `EscapedString` / `EscapedKey` the pointer is the raw `Box<str>` data
+pointer whose ownership lives in the entry; `Drop` and `Clone` are
+implemented manually to free / deep-copy the heap allocation correctly.
+
+### Design decisions
+
+*Fixed layout*: The primary motivation was to give the forthcoming
+`parse_json_zmm_tape.S` assembly a deterministic, ABI-stable representation
+to write into directly in 16-byte stores, with no Rust enum layout involved.
+The `u64` tag-word encodes the kind in the top four bits and the
+length/index in the low 28 bits; the assembly can set an entry in two `mov`
+instructions (tag word then pointer).
+
+*Backwards-compat shim*: All old enum-variant names (`TapeEntry::Null`,
+`TapeEntry::Bool(v)`, `TapeEntry::StartObject(n)`, …) are kept as
+`#[allow(non_snake_case)]` constructor methods / associated constants so the
+pre-existing test suite compiled unchanged.  Pattern-match arms that
+destructured enum payloads were rewritten to use the accessor methods
+(`as_start_object()`, `as_bool()`, etc.).
+
+### Results
+
+`size_of::<TapeEntry>() == 16`, `align_of::<TapeEntry>() == 8`.  All 18
+unit tests and 5 doctests pass; zero warnings.
+
+**Commit**: `e89f2fc` — refactor: replace TapeEntry enum with 16-byte repr(C) struct
+
+
