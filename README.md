@@ -52,20 +52,22 @@ for a fair comparison because sonic-rs defers decoding string content until the
 value is accessed (lazy evaluation); a parse-only measurement would undercount
 its work relative to any real use-case where the parsed data is actually read.
 
-| Parser       | string array | string object | mixed      |
-|--------------|:------------:|:-------------:|:----------:|
-| asmjson zmm  | 8.09 GiB/s   | 5.45 GiB/s    | 364 MiB/s  |
-| sonic-rs     | 7.44 GiB/s   | 4.22 GiB/s    | 485 MiB/s  |
-| asmjson u64  | 6.65 GiB/s   | 4.56 GiB/s    | 358 MiB/s  |
-| serde_json   | 2.46 GiB/s   | 593 MiB/s     | 83.6 MiB/s |
+| Parser               | string array | string object | mixed      |
+|----------------------|:------------:|:-------------:|:----------:|
+| asmjson zmm tape     | 10.81 GiB/s  | 7.15 GiB/s    | 905 MiB/s  |
+| asmjson zmm          | 8.64 GiB/s   | 6.27 GiB/s    | 672 MiB/s  |
+| sonic-rs             | 7.11 GiB/s   | 4.04 GiB/s    | 475 MiB/s  |
+| asmjson u64          | 7.10 GiB/s   | 4.93 GiB/s    | 636 MiB/s  |
+| serde_json           | 2.43 GiB/s   | 535 MiB/s     | 83 MiB/s   |
 
-asmjson zmm leads on string-dominated workloads, where fully decoding escape
-sequences once at parse time and storing them in a flat tape pays off.
-sonic-rs leads on the mixed workload (numbers, booleans, nested objects with
-short strings), where its lazy string decoding defers more work and its
-AVX2-accelerated structural parsing is well-suited to the denser punctuation.
-The portable `u64` SWAR classifier is competitive with sonic-rs on string
-objects despite using no SIMD instructions.
+asmjson zmm tape leads across all three workloads.  It writes a flat
+`TapeEntry` array in the assembly parser itself — one pointer-sized entry per
+value — so structural traversal is a single linear scan with no pointer
+chasing.  The baseline asmjson zmm parser also leads on string-dominated
+workloads; the portable `u64` SWAR classifier is neck-and-neck with sonic-rs
+on string arrays despite using no SIMD instructions, and beats it on string
+objects.  sonic-rs narrows the gap on mixed JSON through its lazy string
+decoding, but zmm tape still leads by 90 %.
 
 ## Internal state machine
 
