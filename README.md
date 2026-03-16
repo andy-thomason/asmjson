@@ -69,6 +69,15 @@ on string arrays despite using no SIMD instructions, and beats it on string
 objects.  sonic-rs narrows the gap on mixed JSON through its lazy string
 decoding, but zmm tape still leads by 90 %.
 
+## Conformance note
+
+asmjson is slightly permissive: its classifier treats **any byte with value
+`< 0x20`** (i.e. all C0 control characters) as whitespace, rather than
+strictly the four characters the JSON specification allows (`0x09` HT, `0x0A`
+LF, `0x0D` CR, `0x20` SP).  Well-formed JSON is parsed identically; input
+that embeds bare control characters other than the four legal ones will be
+accepted where a strict parser would reject it.
+
 ## License
 
 MIT — see [LICENSE](https://github.com/andy-thomason/asmjson/blob/master/LICENSE).
