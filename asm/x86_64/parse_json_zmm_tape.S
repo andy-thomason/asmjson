@@ -36,7 +36,7 @@
 //   Key=5, EscapedKey=6, StartObject=7, EndObject=8, StartArray=9, EndArray=10
 //
 // kind << KIND_SHIFT (60) lives in bits 63-60 of tag_payload.
-// payload lives in bits 27-0 (PAYLOAD_MASK = 0x0FFFFFFF).
+// payload lives in bits 59-0; masked by shl/shr 4 to clear the top 4 kind bits.
 //
 // ---------------------------------------------------------------------------
 // Caller-provided symbols (from Rust lib with C linkage)
@@ -150,7 +150,7 @@
 
 // Bit-field constants
 .equ KIND_SHIFT,     60
-.equ PAYLOAD_MASK,   0x0FFFFFFF
+// PAYLOAD_MASK: clear top 4 bits via  shl r10, 4 / shr r10, 4  (avoids 64-bit imm)
 
 // MAX_JSON_DEPTH
 .equ MAX_JSON_DEPTH, 64
@@ -428,7 +428,8 @@ parse_json_zmm_tape:
     lea     rax, [rbx + rbx]
     lea     rax, [r14 + rax*8]
     mov     r10, rdx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     mov     r11, TAPE_KIND_STRING
     shl     r11, KIND_SHIFT
     or      r10, r11
@@ -461,7 +462,8 @@ parse_json_zmm_tape:
     lea     rax, [rbx + rbx]
     lea     rax, [r14 + rax*8]
     mov     r10, rdx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     mov     r11, TAPE_KIND_ESCAPED_STRING
     shl     r11, KIND_SHIFT
     or      r10, r11
@@ -570,7 +572,8 @@ parse_json_zmm_tape:
     lea     rax, [rbx + rbx]
     lea     rax, [r14 + rax*8]
     mov     r10, rdx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     mov     r11, TAPE_KIND_KEY
     shl     r11, KIND_SHIFT
     or      r10, r11
@@ -601,7 +604,8 @@ parse_json_zmm_tape:
     lea     rax, [rbx + rbx]
     lea     rax, [r14 + rax*8]
     mov     r10, rdx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     mov     r11, TAPE_KIND_ESCAPED_KEY
     shl     r11, KIND_SHIFT
     or      r10, r11
@@ -818,7 +822,8 @@ parse_json_zmm_tape:
     lea     rax, [r11 + r11]
     lea     rax, [r14 + rax*8]                    // &tape[start_idx]
     mov     r10, rbx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     or      qword ptr [rax], r10                  // patch end_idx into StartObject
     // Write EndObject entry at tape[rbx]
     lea     rax, [rbx + rbx]
@@ -895,7 +900,8 @@ parse_json_zmm_tape:
     lea     rax, [r11 + r11]
     lea     rax, [r14 + rax*8]                    // &tape[start_idx]
     mov     r10, rbx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     or      qword ptr [rax], r10                  // patch end_idx into StartArray
     // Write EndArray entry at tape[rbx]
     lea     rax, [rbx + rbx]
@@ -1041,7 +1047,8 @@ parse_json_zmm_tape:
     lea     rax, [r11 + r11]
     lea     rax, [r14 + rax*8]
     mov     r10, rbx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     or      qword ptr [rax], r10
     // Write EndObject
     lea     rax, [rbx + rbx]
@@ -1077,7 +1084,8 @@ parse_json_zmm_tape:
     lea     rax, [r11 + r11]
     lea     rax, [r14 + rax*8]
     mov     r10, rbx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     or      qword ptr [rax], r10
     // Write EndArray
     lea     rax, [rbx + rbx]
@@ -1232,7 +1240,8 @@ parse_json_zmm_tape:
     lea     rax, [rbx + rbx]
     lea     rax, [r14 + rax*8]
     mov     r10, rdx
-    and     r10, PAYLOAD_MASK
+    shl     r10, 4
+    shr     r10, 4
     mov     r11, TAPE_KIND_NUMBER
     shl     r11, KIND_SHIFT
     or      r10, r11

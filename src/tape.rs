@@ -26,7 +26,7 @@ pub enum TapeEntryKind {
 
 // Bit-field constants
 const KIND_SHIFT: u64 = 60;
-const PAYLOAD_MASK: u64 = (1 << 28) - 1; // low 28 bits
+const PAYLOAD_MASK: u64 = u64::MAX >> 4; // low 60 bits
 
 // ---------------------------------------------------------------------------
 // TapeEntry — exactly 16 bytes
@@ -39,7 +39,7 @@ const PAYLOAD_MASK: u64 = (1 << 28) - 1; // low 28 bits
 /// | word | bits | meaning |
 /// |------|------|---------|
 /// | 0 (offset 0) | 63–60 | [`TapeEntryKind`] discriminant |
-/// | 0 (offset 0) | 27–0  | string/key length **or** object/array end-index |
+/// | 0 (offset 0) | 59–0  | string/key length **or** object/array end-index |
 /// | 1 (offset 8) | 63–0  | pointer to string bytes (null for non-string kinds) |
 ///
 /// For `EscapedString` / `EscapedKey` the pointer is the data pointer of a
@@ -50,7 +50,7 @@ const PAYLOAD_MASK: u64 = (1 << 28) - 1; // low 28 bits
 /// For `Null`, `EndObject`, `EndArray` both payload and pointer are zero.
 #[repr(C)]
 pub struct TapeEntry<'a> {
-    /// Bits 63–60: kind.  Bits 27–0: length or end-index.
+    /// Bits 63–60: kind.  Bits 59–0: length or end-index.
     pub(crate) tag_payload: u64,
     /// Pointer to string bytes, or null.
     pub(crate) ptr: *const u8,
@@ -246,7 +246,7 @@ impl<'a> TapeEntry<'a> {
 
     // ---- backfill helper (used by TapeWriter::end_object / end_array) ----
 
-    /// Overwrite the payload field (low 28 bits) without changing the kind.
+    /// Overwrite the payload field (low 60 bits) without changing the kind.
     #[inline]
     pub(crate) fn set_payload(&mut self, v: usize) {
         self.tag_payload = (self.tag_payload & !(PAYLOAD_MASK)) | ((v as u64) & PAYLOAD_MASK);
