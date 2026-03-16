@@ -23,6 +23,69 @@ assert_eq!(tape.root().get("age").as_i64(), Some(30));
 For repeated parses, store the result of `choose_classifier` in a static once
 cell or pass it through your application rather than calling it on every parse.
 
+## Optimisation tips
+
+`TapeRef` is a plain `Copy` cursor — two `usize`s — so it is cheap to store
+and reuse.  Holding on to a `TapeRef` you have already located lets you skip
+re-scanning work on subsequent accesses.
+
+### Cache field refs from a one-pass object scan
+
+`get(key)` walks the object from the start every time it is called.  If you
+need several fields from the same object, iterate once with `object_iter` and
+keep the values you care about:
+
+```rust
+use asmjson::{parse_to_tape, choose_classifier, JsonRef, TapeRef};
+
+let classify = choose_classifier();
+let src = r#"{"items":[1,2,3],"meta":{"count":3}}"#;
+let tape = parse_to_tape(src, classify).unwrap();
+let root = tape.root().unwrap();
+
+// Single pass — O(n_keys) regardless of how many fields we need.
+let mut items_ref: Option<TapeRef> = None;
+let mut meta_ref:  Option<TapeRef> = None;
+for (key, val) in root.object_iter().unwrap() {
+    match key {
+        "items" => items_ref = Some(val),
+        "meta"  => meta_ref  = Some(val),
+        _ => {}
+    }
+}
+
+// Subsequent accesses go straight to the cached position — no re-scan.
+let count = meta_ref.unwrap().get("count").unwrap().as_i64();
+assert_eq!(count, Some(3));
+```
+
+### Collect array elements for indexed or multi-pass access
+
+`array_iter` yields each element once in document order.  Collecting the
+results into a `Vec<TapeRef>` gives you random access and any number of
+further passes at zero additional parsing cost:
+
+```rust
+use asmjson::{parse_to_tape, choose_classifier, JsonRef, TapeRef};
+
+let classify = choose_classifier();
+let src = r#"[{"name":"Alice","score":91},{"name":"Bob","score":78},{"name":"Carol","score":85}]"#;
+let tape = parse_to_tape(src, classify).unwrap();
+let root = tape.root().unwrap();
+
+// Collect once — O(n) scan.
+let rows: Vec<TapeRef> = root.array_iter().unwrap().collect();
+
+// Random access is now O(1) — no re-scanning.
+assert_eq!(rows[1].get("name").unwrap().as_str(), Some("Bob"));
+
+// Multiple passes over the same rows are free.
+let total: i64 = rows.iter()
+    .filter_map(|r| r.get("score").and_then(|s| s.as_i64()))
+    .sum();
+assert_eq!(total, 91 + 78 + 85);
+```
+
 ## Output formats
 
 - `parse_to_tape` — allocates a flat `Tape` of tokens with O(1) structural skips.
