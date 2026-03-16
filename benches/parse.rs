@@ -6,7 +6,7 @@ use asmjson::parse_to_tape as parse_json;
 use asmjson::parse_to_tape_zmm_dyn;
 #[cfg(feature = "stats")]
 use asmjson::stats;
-use asmjson::{TapeEntry, TapeEntryKind, classify_u64, classify_zmm, parse_to_tape};
+use asmjson::{TapeEntryKind, classify_u64, classify_zmm, parse_to_tape};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
 // ---------------------------------------------------------------------------
