@@ -1774,3 +1774,58 @@ the asm path.
 guards, net -2 from the 9 previously; no regressions).
 
 **Commit**: `c9a266b` refactor: drop ClassifyFn; four clean entry points with unsafe zmm variants
+---
+
+## Session 22 — SAX writer, bench rename, remove classify_*
+
+### Remove classify_ymm / classify_zmm / ByteStateConstants
+
+`classify_ymm`, `classify_zmm`, `ByteStateConstants`, `ZMM_CONSTANTS`, and the
+`classifier_agreement` unit test were removed entirely from `src/lib.rs`.  Even
+`#[cfg(test)]` guards were dropped — the classifier logic is embedded inside the
+asm trampolines and needs no Rust-level exposure.
+
+27 unit tests pass (the ignored zmm tests that need the `avx512bw` feature are
+still present but not compiled on non-AVX-512 CI machines).
+
+**Commit**: `6484322` refactor: remove classify_ymm, classify_zmm, ByteStateConstants, and classifier_agreement test
+
+### LenSumWriter + bench rename (asmjson/sax, asmjson/dom)
+
+Added a `LenSumWriter` struct to `benches/parse.rs` that implements
+`JsonWriter<'src, Output = usize>` and accumulates the total byte length of all
+string and key values encountered.  This gives a meaningful SAX-style workload
+with no tape allocation.
+
+Renamed benchmark slots in all three groups (string_array, string_object, mixed):
+
+- `asmjson/zmm` → **`asmjson/sax`** — calls `parse_with_zmm(&data, LenSumWriter::new())`, single-pass, no heap allocation for the tape.
+- `asmjson/zmm_tape` → **`asmjson/dom`** — calls `parse_to_tape_zmm(&data, None)` then traverses the tape with `tape_sum_lens`.
+- `asmjson/u64` — unchanged (safe SWAR path, builds tape).
+
+### Design decisions
+
+The SAX path (`parse_with_zmm` + `LenSumWriter`) avoids the tape allocation and
+the subsequent linear scan.  The benchmark therefore measures the parser's
+throughput in isolation.  The DOM path (`parse_to_tape_zmm`) keeps the old
+comparison point.
+
+`LenSumWriter::finish` returns `Some(self.total)` so the result can be passed to
+`black_box`, preventing the compiler from eliding the computation.
+
+### Results
+
+| Parser | string_array | string_object | mixed |
+|---|---|---|---|
+| asmjson/sax | 10.78 GiB/s | 8.29 GiB/s | 1.17 GiB/s |
+| asmjson/dom | 10.93 GiB/s | 6.94 GiB/s | 897 MiB/s |
+| asmjson/u64 | 7.02 GiB/s | 4.91 GiB/s | 607 MiB/s |
+| sonic-rs | 6.92 GiB/s | 4.06 GiB/s | 478 MiB/s |
+| serde_json | 2.41 GiB/s | 534 MiB/s | 78 MiB/s |
+| simd-json | 1.91 GiB/s | 1.19 GiB/s | 174 MiB/s |
+
+`asmjson/sax` wins on string_object and mixed (no tape-write overhead), while
+`asmjson/dom` edges ahead on string_array (the extra tape scan is cheap relative
+to the dominance of string-data throughput).
+
+**Commit**: `855c37c` bench: add LenSumWriter, rename zmm→sax, zmm_tape→dom; update conversation log

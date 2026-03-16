@@ -2,10 +2,55 @@
 use asmjson::parse_to_tape as parse_json;
 #[cfg(target_arch = "x86_64")]
 use asmjson::parse_to_tape_zmm;
+#[cfg(target_arch = "x86_64")]
+use asmjson::parse_with_zmm;
 #[cfg(feature = "stats")]
 use asmjson::stats;
-use asmjson::{TapeEntryKind, parse_to_tape};
+use asmjson::{JsonWriter, TapeEntryKind, parse_to_tape};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+
+// ---------------------------------------------------------------------------
+// SAX writer — sums key and string byte lengths without building a tape
+// ---------------------------------------------------------------------------
+
+/// A [`JsonWriter`] that accumulates the total byte length of every string
+/// value and object key.  Allocates nothing; suitable for benchmarking the
+/// pure parse cost of the SAX path.
+struct LenSumWriter {
+    total: usize,
+}
+
+impl LenSumWriter {
+    fn new() -> Self {
+        Self { total: 0 }
+    }
+}
+
+impl<'src> JsonWriter<'src> for LenSumWriter {
+    type Output = usize;
+    fn null(&mut self) {}
+    fn bool_val(&mut self, _v: bool) {}
+    fn number(&mut self, _s: &'src str) {}
+    fn string(&mut self, s: &'src str) {
+        self.total += s.len();
+    }
+    fn escaped_string(&mut self, s: Box<str>) {
+        self.total += s.len();
+    }
+    fn key(&mut self, s: &'src str) {
+        self.total += s.len();
+    }
+    fn escaped_key(&mut self, s: Box<str>) {
+        self.total += s.len();
+    }
+    fn start_object(&mut self) {}
+    fn end_object(&mut self) {}
+    fn start_array(&mut self) {}
+    fn end_array(&mut self) {}
+    fn finish(self) -> Option<usize> {
+        Some(self.total)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Post-parse traversal helpers
@@ -230,14 +275,15 @@ fn bench_string_array(c: &mut Criterion) {
     print_stats("string_array", &data);
     let mut group = c.benchmark_group("string_array");
     group.throughput(Throughput::Bytes(data.len() as u64));
-    group.bench_function("asmjson/zmm", |b| {
+    #[cfg(target_arch = "x86_64")]
+    group.bench_function("asmjson/sax", |b| {
         b.iter(|| {
-            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let total = unsafe { parse_with_zmm(&data, LenSumWriter::new()) }.unwrap();
+            std::hint::black_box(total)
         });
     });
     #[cfg(target_arch = "x86_64")]
-    group.bench_function("asmjson/zmm_tape", |b| {
+    group.bench_function("asmjson/dom", |b| {
         b.iter(|| {
             let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
@@ -277,14 +323,15 @@ fn bench_string_object(c: &mut Criterion) {
     print_stats("string_object", &data);
     let mut group = c.benchmark_group("string_object");
     group.throughput(Throughput::Bytes(data.len() as u64));
-    group.bench_function("asmjson/zmm", |b| {
+    #[cfg(target_arch = "x86_64")]
+    group.bench_function("asmjson/sax", |b| {
         b.iter(|| {
-            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let total = unsafe { parse_with_zmm(&data, LenSumWriter::new()) }.unwrap();
+            std::hint::black_box(total)
         });
     });
     #[cfg(target_arch = "x86_64")]
-    group.bench_function("asmjson/zmm_tape", |b| {
+    group.bench_function("asmjson/dom", |b| {
         b.iter(|| {
             let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
@@ -324,14 +371,15 @@ fn bench_mixed(c: &mut Criterion) {
     print_stats("mixed", &data);
     let mut group = c.benchmark_group("mixed");
     group.throughput(Throughput::Bytes(data.len() as u64));
-    group.bench_function("asmjson/zmm", |b| {
+    #[cfg(target_arch = "x86_64")]
+    group.bench_function("asmjson/sax", |b| {
         b.iter(|| {
-            let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
-            std::hint::black_box(tape_sum_lens(&tape))
+            let total = unsafe { parse_with_zmm(&data, LenSumWriter::new()) }.unwrap();
+            std::hint::black_box(total)
         });
     });
     #[cfg(target_arch = "x86_64")]
-    group.bench_function("asmjson/zmm_tape", |b| {
+    group.bench_function("asmjson/dom", |b| {
         b.iter(|| {
             let tape = unsafe { parse_to_tape_zmm(&data, None) }.unwrap();
             std::hint::black_box(tape_sum_lens(&tape))
