@@ -9,7 +9,6 @@ cargo fmt
 ```
 
 Make sure that there is exactly one blank line between functions.
-Don't mix inline with non-inline braces.
 
 Bad:
 
