@@ -2314,3 +2314,50 @@ one fewer external call per escaped token).
 ### Commit
 
 `da9e8aa` refactor: remove unescape_buf from parse_json_zmm_dom; add dom_unescape_to_box_str
+
+## Session: recompute DRAM bandwidth with ZMM loads
+
+### What was done
+
+Added `examples/mem_bw_zmm.rs` — a standalone memory-bandwidth benchmark that
+allocates a 2 GiB, 64-byte aligned buffer (via `std::alloc::alloc`), touches
+every page to force physical backing, then runs 8 sequential passes with two
+AVX-512 strategies and reports best and median GiB/s:
+
+* **zmm** — `vmovdqu64` (temporal) loads via `_mm512_loadu_si512`.
+* **zmm-nt** — `vmovntdqa` (non-temporal streaming) loads via
+  `_mm512_stream_load_si512`; bypasses CPU read-allocate.
+
+Both strategies OR all loaded vectors into a 512-bit accumulator and store it
+to prevent dead-code elimination.
+
+### Design decisions
+
+The previous bandwidth estimate (~45 GiB/s) was measured with scalar reads.
+Using ZMM loads gives the prefetcher/memory controller a better chance to
+stream at full width, which is more representative of what the AVX-512BW
+parser actually exercises.  2 GiB ensures the working set is far larger than
+the 64 MB L3 cache so results reflect DRAM, not cache, bandwidth.
+
+Non-temporal loads (`vmovntdqa`) require 16-byte alignment (64-byte for
+ZMM); the 64-byte aligned allocation guarantees this.
+
+### Results
+
+Ryzen 9 9955HX (Zen 5, DDR5 dual-channel):
+
+| Strategy                 | Best      | Median    |
+|--------------------------|-----------|-----------|
+| zmm temporal (`vmovdqu64`) | 47.5 GiB/s | 47.4 GiB/s |
+| zmm-nt (`vmovntdqa`)     | 49.5 GiB/s | 47.9 GiB/s |
+
+The parallel JSON parser (26.6 GiB/s) reaches ~56 % of the ZMM temporal
+ceiling, up from the ~59 % figure that used the now-known-underestimated
+scalar baseline.
+
+README updated: replaced "45 GiB/s scalar" row with the two ZMM rows and
+revised efficiency to ~56 %.
+
+### Commit
+
+`b50d502` example: add mem_bw_zmm — ZMM temporal and NT load bandwidth benchmark

@@ -55,9 +55,10 @@ Rayon.  CPUID auto-selected the AVX-512BW assembly path.
 | Configuration                     | Throughput   |
 |-----------------------------------|:------------:|
 | Rayon + AVX-512BW (`parse_with_zmm`) | **26.6 GiB/s** |
-| Sequential DRAM read (single thread, 2 GiB buffer) | 45 GiB/s |
+| ZMM temporal loads (single thread, 2 GiB buffer) | 47.5 GiB/s |
+| ZMM non-temporal loads (`vmovntdqa`, single thread) | 49.5 GiB/s |
 
-The parser reaches ~59 % of the single-threaded DRAM read ceiling while
+The parser reaches ~56 % of the single-threaded DRAM read ceiling while
 doing real work (structure parsing, string counting) across 1 024 parallel
 Rayon tasks.
 
