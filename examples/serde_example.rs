@@ -13,6 +13,7 @@
 use asmjson::de::from_taperef;
 use asmjson::dom_parser;
 use serde::Deserialize;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Data model matching the "mixed" generator
@@ -71,12 +72,12 @@ fn gen_mixed(target_bytes: usize) -> String {
 fn run(label: &str, data: &str) {
     // Parse to DOM — CPUID dispatch handled by dom_parser().
     let parse = dom_parser();
-    let t0 = std::time::Instant::now();
+    let t0 = Instant::now();
     let tape = parse(data, None).expect("parse failed");
     let parse_elapsed = t0.elapsed();
 
     // Deserialise the root array.
-    let t1 = std::time::Instant::now();
+    let t1 = Instant::now();
     let root = tape.root().expect("empty tape");
     let records: Vec<Record> = from_taperef(root).expect("deserialise failed");
     let serde_elapsed = t1.elapsed();
@@ -95,17 +96,29 @@ fn run(label: &str, data: &str) {
     assert_eq!(records[1].score, Some(0.0)); // i/2 = 0
 
     let bytes = data.len() as f64;
-    let mib = (1u64 << 20) as f64;
-    let parse_mibs = bytes / (parse_elapsed.as_secs_f64() * mib);
-    let serde_mibs = bytes / (serde_elapsed.as_secs_f64() * mib);
+    let mib = 1_048_576.0_f64;
+    let combined_ms = (parse_elapsed + serde_elapsed).as_secs_f64() * 1000.0;
+    let combined_mibs = bytes / ((parse_elapsed + serde_elapsed).as_secs_f64() * mib);
+    let parse_ms = parse_elapsed.as_secs_f64() * 1000.0;
+    let serde_ms = serde_elapsed.as_secs_f64() * 1000.0;
     println!(
-        "{label}: decoded {} records, last id={}\n  parse_to_dom: {:.3} ms  ({:.0} MiB/s)  |  from_taperef: {:.3} ms  ({:.0} MiB/s)",
+        "{label}: {} records  |  parse: {parse_ms:.3} ms  serde: {serde_ms:.3} ms  combined: {combined_ms:.3} ms  ({combined_mibs:.0} MiB/s)",
         records.len(),
-        records.last().unwrap().id,
-        parse_elapsed.as_secs_f64() * 1000.0,
-        parse_mibs,
-        serde_elapsed.as_secs_f64() * 1000.0,
-        serde_mibs,
+    );
+}
+
+fn run_serde_json(data: &str) {
+    let t0 = Instant::now();
+    let records: Vec<Record> = serde_json::from_str(data).expect("serde_json failed");
+    let elapsed = t0.elapsed();
+
+    let bytes = data.len() as f64;
+    let mib = 1_048_576.0_f64;
+    let ms = elapsed.as_secs_f64() * 1000.0;
+    let mibs = bytes / (elapsed.as_secs_f64() * mib);
+    println!(
+        "serde_json:          {} records  |  combined: {ms:.3} ms  ({mibs:.0} MiB/s)",
+        records.len(),
     );
 }
 
@@ -115,12 +128,13 @@ fn main() {
 
     #[cfg(target_arch = "x86_64")]
     let label = if is_x86_feature_detected!("avx512bw") {
-        "dom_parser (AVX-512BW)"
+        "asmjson (AVX-512BW)    "
     } else {
-        "dom_parser (portable SWAR)"
+        "asmjson (portable SWAR)"
     };
     #[cfg(not(target_arch = "x86_64"))]
-    let label = "dom_parser (portable SWAR)";
+    let label = "asmjson (portable SWAR)";
 
     run(label, &data);
+    run_serde_json(&data);
 }

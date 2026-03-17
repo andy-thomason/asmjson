@@ -2427,3 +2427,35 @@ and `mmap_parallel` compiles cleanly with zero warnings.
 ### Commit
 
 `f79d93d` use dom_parser/sax_parser in examples, add Copy+Clone to SaxParser
+
+## Session — serde_example combined MiB/s + serde_json comparison
+
+### What was done
+
+Reworked `serde_example.rs` to report a single combined MiB/s for the
+`parse_to_dom` + `from_taperef` pipeline, and added a `run_serde_json`
+function that times `serde_json::from_str::<Vec<Record>>` end-to-end on
+the same data for a direct comparison.
+
+The per-step breakdown (parse ms / serde ms) is still printed alongside the
+combined figure so both are visible.
+
+### Design decisions
+
+`serde_json` was already a dev-dependency (used in the benchmarks), so no
+new dependency was required.  The combined time is computed as
+`parse_elapsed + serde_elapsed` using `std::ops::Add` for `Duration`, which
+keeps the arithmetic exact and avoids floating-point rounding between the two
+measurements.
+
+### Results
+
+On this machine (AVX-512BW):
+```
+asmjson (AVX-512BW)    : 8066 records  |  parse: 0.9 ms  serde: 7.5 ms  combined: 8.4 ms  (97 MiB/s)
+serde_json:          8066 records  |  combined: 24.1 ms  (34 MiB/s)
+```
+
+### Commit
+
+`16ce530` serde_example: combined MiB/s + serde_json comparison
