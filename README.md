@@ -45,6 +45,23 @@ Comparison point is `sonic-rs` (lazy Value, AVX2).
 
 † simd-json numbers include buffer cloning overhead (see note above).
 
+### Parallel JSON Lines throughput (`mmap_parallel` example)
+
+Measured on a single machine parsing a 1 GiB JSON Lines file
+(`/tmp/file.jsonl`, ~10.7 million lines, ~100 bytes each) memory-mapped with
+`memmap2` and split into 1 024 × ~1 MiB chunks processed in parallel with
+Rayon.  CPUID auto-selected the AVX-512BW assembly path.
+
+| Configuration                     | Throughput   |
+|-----------------------------------|:------------:|
+| Rayon + AVX-512BW (`parse_with_zmm`) | **26.6 GiB/s** |
+
+Run it yourself:
+
+```sh
+cargo run --release --example mmap_parallel
+```
+
 Note: `asmjson/sax` and `asmjson/dom` are implemented entirely in hand-written
 x86-64 assembly using AVX-512BW instructions.  They require a CPU with
 AVX-512BW support (Ice Lake or later on Intel, Zen 4 or later on AMD) and are
