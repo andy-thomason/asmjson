@@ -394,21 +394,23 @@ fn write_atom<'a, W: Sax<'a>>(s: &'a str, w: &mut W) -> bool {
 
 /// Parse `src` into a flat [`Dom`] using the portable SWAR classifier.
 ///
+/// `initial_capacity` pre-sizes the tape allocation.  Pass `None` to let the
+/// parser decide (equivalent to `Some(0)`, i.e. start with a default-sized
+/// `Vec`).  The tape grows automatically so this is only a performance hint.
+///
 /// Returns `None` if the input is not valid JSON.
 ///
-/// `StartObject(n)` / `StartArray(n)` entries carry the index of the matching
-/// closer so entire subtrees can be skipped in O(1).  Access the tape via
-/// [`Dom::root`] which returns a [`DomRef`] cursor that implements [`JsonRef`].
-///
-/// For maximum throughput on CPUs with AVX-512BW, use [`parse_to_dom_zmm`].
+/// For maximum throughput on CPUs with AVX-512BW, use [`parse_to_dom_zmm`] or
+/// the safe wrapper returned by [`dom_parser`].
 ///
 /// ```rust
 /// use asmjson::{parse_to_dom, JsonRef};
-/// let tape = parse_to_dom(r#"{"x":1}"#).unwrap();
+/// let tape = parse_to_dom(r#"{"x":1}"#, None).unwrap();
 /// assert_eq!(tape.root().get("x").as_i64(), Some(1));
 /// ```
-pub fn parse_to_dom<'a>(src: &'a str) -> Option<Dom<'a>> {
-    parse_with(src, DomWriter::new())
+pub fn parse_to_dom<'a>(src: &'a str, initial_capacity: Option<usize>) -> Option<Dom<'a>> {
+    let cap = initial_capacity.unwrap_or(0);
+    parse_with(src, DomWriter::with_capacity(cap))
 }
 
 /// Parse `src` to a [`Dom`] using the hand-written x86-64 AVX-512BW
@@ -512,13 +514,108 @@ pub unsafe fn parse_to_dom_zmm<'a>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// CPUID-dispatching helpers
+// ---------------------------------------------------------------------------
+
+/// Safe trampoline for `parse_to_dom_zmm`; only called when CPUID has
+/// confirmed AVX-512BW support (see [`dom_parser`]).
+#[cfg(target_arch = "x86_64")]
+fn parse_to_dom_zmm_safe<'a>(src: &'a str, cap: Option<usize>) -> Option<Dom<'a>> {
+    // SAFETY: dom_parser() only returns this fn after CPUID confirms AVX-512BW.
+    unsafe { parse_to_dom_zmm(src, cap) }
+}
+
+/// Returns a CPUID-selected DOM parse function.
+///
+/// On CPUs with AVX-512BW the returned function uses the hand-written
+/// assembly parser; otherwise the portable SWAR parser is used.  The CPUID
+/// check is performed once when `dom_parser()` is called.
+///
+/// The returned function has the signature
+/// `fn(&str, Option<usize>) -> Option<Dom<'_>>`.
+///
+/// ```rust
+/// use asmjson::{dom_parser, JsonRef};
+/// let parse = dom_parser();
+/// let tape = parse(r#"{"x":1}"#, None).unwrap();
+/// assert_eq!(tape.root().get("x").as_i64(), Some(1));
+/// ```
+pub fn dom_parser() -> for<'a> fn(&'a str, Option<usize>) -> Option<Dom<'a>> {
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512bw") {
+        return parse_to_dom_zmm_safe;
+    }
+    parse_to_dom
+}
+
+/// Handle returned by [`sax_parser`]; call `.parse(src, writer)`.
+///
+/// Stores the result of a CPUID check performed at construction time so that
+/// repeated `.parse()` calls pay only one branch.
+pub struct SaxParser {
+    #[cfg(target_arch = "x86_64")]
+    zmm: bool,
+}
+
+impl SaxParser {
+    /// Parse `src` with `writer` using the best available CPU path.
+    pub fn parse<'a, W: Sax<'a>>(&self, src: &'a str, writer: W) -> Option<W::Output> {
+        #[cfg(target_arch = "x86_64")]
+        if self.zmm {
+            // SAFETY: constructed only when CPUID confirms AVX-512BW.
+            return unsafe { parse_with_zmm(src, writer) };
+        }
+        parse_with(src, writer)
+    }
+}
+
+/// Returns a CPUID-selected SAX parser handle.
+///
+/// The CPUID check is performed once; subsequent calls to
+/// [`SaxParser::parse`] dispatch to the best available path without
+/// repeating it.
+///
+/// ```rust
+/// use asmjson::sax::Sax;
+/// use asmjson::sax_parser;
+///
+/// struct Counter { n: usize }
+/// impl<'a> Sax<'a> for Counter {
+///     type Output = usize;
+///     fn null(&mut self) {}
+///     fn bool_val(&mut self, _: bool) {}
+///     fn number(&mut self, _: &str) {}
+///     fn string(&mut self, _: &str) { self.n += 1; }
+///     fn escaped_string(&mut self, _: &str) { self.n += 1; }
+///     fn key(&mut self, _: &str) {}
+///     fn escaped_key(&mut self, _: &str) {}
+///     fn start_object(&mut self) {}
+///     fn end_object(&mut self) {}
+///     fn start_array(&mut self) {}
+///     fn end_array(&mut self) {}
+///     fn finish(self) -> Option<usize> { Some(self.n) }
+/// }
+///
+/// let parser = sax_parser();
+/// let n = parser.parse(r#"["a","b"]"#, Counter { n: 0 }).unwrap();
+/// assert_eq!(n, 2);
+/// ```
+pub fn sax_parser() -> SaxParser {
+    SaxParser {
+        #[cfg(target_arch = "x86_64")]
+        zmm: is_x86_feature_detected!("avx512bw"),
+    }
+}
+
 /// Parse `src` using a custom [`JsonWriter`], returning its output.
 ///
 /// This is the generic entry point: supply your own writer to produce any
 /// output in a single pass over the source.  Uses the portable SWAR
 /// classifier; works on any architecture.
 ///
-/// For maximum throughput on CPUs with AVX-512BW, use [`parse_with_zmm`].
+/// For maximum throughput on CPUs with AVX-512BW, use [`parse_with_zmm`] or
+/// the safe wrapper returned by [`sax_parser`].
 pub fn parse_with<'a, W: Sax<'a>>(src: &'a str, writer: W) -> Option<W::Output> {
     let mut frames_buf = [FrameKind::Object; MAX_JSON_DEPTH];
     parse_json_impl(src, writer, &mut frames_buf)
@@ -1181,7 +1278,8 @@ mod tests {
 
     #[cfg(target_arch = "x86_64")]
     fn zmm_dom_matches(src: &str) {
-        let ref_tape = parse_to_dom(src).unwrap_or_else(|| panic!("reference rejected: {src:?}"));
+        let ref_tape =
+            parse_to_dom(src, None).unwrap_or_else(|| panic!("reference rejected: {src:?}"));
         let asm_tape = unsafe { parse_to_dom_zmm(src, None) }
             .unwrap_or_else(|| panic!("zmm_tape rejected: {src:?}"));
         assert_eq!(
@@ -1399,21 +1497,21 @@ mod tests {
     fn rust_even_backslash_before_quote() {
         use crate::JsonRef;
         // `\\` = one literal backslash, then `"` terminates string → decoded = `\`
-        let t = parse_to_dom(r#"{"k":"\\"}"#).expect("parse failed");
+        let t = parse_to_dom(r#"{"k":"\\"}"#, None).expect("parse failed");
         assert_eq!(t.root().get("k").as_str(), Some("\\"));
         // `\\\\` = two literal backslashes → decoded = `\\`
-        let t = parse_to_dom(r#"{"k":"\\\\"}"#).expect("parse failed");
+        let t = parse_to_dom(r#"{"k":"\\\\"}"#, None).expect("parse failed");
         assert_eq!(t.root().get("k").as_str(), Some("\\\\"));
         // `\\` inside array
-        let t = parse_to_dom(r#"["\\"]"#).expect("parse failed");
+        let t = parse_to_dom(r#"["\\"]"#, None).expect("parse failed");
         assert_eq!(t.root().index_at(0).as_str(), Some("\\"));
         // Mixed content: `abc\\` followed by closing quote → decoded = `abc\`
-        let t = parse_to_dom(r#"{"k":"abc\\"}"#).expect("parse failed");
+        let t = parse_to_dom(r#"{"k":"abc\\"}"#, None).expect("parse failed");
         assert_eq!(t.root().get("k").as_str(), Some("abc\\"));
         // Three backslashes before `"`: `\\` escapes itself, `\"` escapes the quote.
         // So `\\\"` does NOT close the string; the outer `"` closes it.
         // Decoded value = `\"` (backslash + quote).
-        let t = parse_to_dom("{\"k\":\"\\\\\\\"\"}").expect("parse failed");
+        let t = parse_to_dom("{\"k\":\"\\\\\\\"\"}", None).expect("parse failed");
         assert_eq!(t.root().get("k").as_str(), Some("\\\""));
     }
 

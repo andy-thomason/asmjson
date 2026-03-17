@@ -11,9 +11,7 @@
 //! ```
 
 use asmjson::de::from_taperef;
-use asmjson::parse_to_dom;
-#[cfg(target_arch = "x86_64")]
-use asmjson::parse_to_dom_zmm;
+use asmjson::dom_parser;
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
@@ -71,17 +69,10 @@ fn gen_mixed(target_bytes: usize) -> String {
 // ---------------------------------------------------------------------------
 
 fn run(label: &str, data: &str) {
-    // Parse to DOM.
+    // Parse to DOM — CPUID dispatch handled by dom_parser().
+    let parse = dom_parser();
     let t0 = std::time::Instant::now();
-    #[cfg(target_arch = "x86_64")]
-    let tape = if is_x86_feature_detected!("avx512bw") {
-        // SAFETY: CPUID confirmed AVX-512BW.
-        unsafe { parse_to_dom_zmm(data, None) }.expect("parse failed")
-    } else {
-        parse_to_dom(data).expect("parse failed")
-    };
-    #[cfg(not(target_arch = "x86_64"))]
-    let tape = parse_to_dom(data).expect("parse failed");
+    let tape = parse(data, None).expect("parse failed");
     let parse_elapsed = t0.elapsed();
 
     // Deserialise the root array.
@@ -124,12 +115,12 @@ fn main() {
 
     #[cfg(target_arch = "x86_64")]
     let label = if is_x86_feature_detected!("avx512bw") {
-        "parse_to_dom_zmm + from_taperef  (AVX-512BW)"
+        "dom_parser (AVX-512BW)"
     } else {
-        "parse_to_dom + from_taperef  (portable SWAR)"
+        "dom_parser (portable SWAR)"
     };
     #[cfg(not(target_arch = "x86_64"))]
-    let label = "parse_to_dom + from_taperef  (portable SWAR)";
+    let label = "dom_parser (portable SWAR)";
 
     run(label, &data);
 }

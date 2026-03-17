@@ -437,9 +437,9 @@ pub(crate) struct DomWriter<'a> {
 }
 
 impl<'a> DomWriter<'a> {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn with_capacity(cap: usize) -> Self {
         Self {
-            entries: Vec::new(),
+            entries: Vec::with_capacity(cap),
             open: Vec::new(),
             has_escapes: false,
         }
@@ -631,7 +631,7 @@ impl<'t, 'src: 't> DomRef<'t, 'src> {
     /// ```rust
     /// use asmjson::{parse_to_dom, JsonRef};
     ///
-    /// let tape = parse_to_dom(r#"{"a":1,"b":2}"#).unwrap();
+    /// let tape = parse_to_dom(r#"{"a":1,"b":2}"#, None).unwrap();
     /// let root = tape.root().unwrap();
     /// for (key, val) in root.object_iter().unwrap() {
     ///     println!("{key}: {}", val.as_number_str().unwrap());
@@ -655,7 +655,7 @@ impl<'t, 'src: 't> DomRef<'t, 'src> {
     /// ```rust
     /// use asmjson::{parse_to_dom, JsonRef};
     ///
-    /// let tape = parse_to_dom(r#"[1,2,3]"#).unwrap();
+    /// let tape = parse_to_dom(r#"[1,2,3]"#, None).unwrap();
     /// let root = tape.root().unwrap();
     /// for elem in root.array_iter().unwrap() {
     ///     println!("{}", elem.as_number_str().unwrap());
@@ -683,7 +683,7 @@ mod tests {
     use super::{Dom, DomEntry};
 
     fn run_tape(json: &'static str) -> Option<Dom<'static>> {
-        parse_to_dom(json)
+        parse_to_dom(json, None)
     }
 
     fn te_str(s: &'static str) -> DomEntry<'static> {
@@ -840,7 +840,7 @@ mod tests {
         assert_eq!(pairs[2].0, "z");
         assert_eq!(pairs[2].1, (None, None, Some("hi")));
         // Non-object returns None.
-        let at = parse_to_dom("[1]").unwrap();
+        let at = parse_to_dom("[1]", None).unwrap();
         assert!(at.root().unwrap().object_iter().is_none());
     }
 
@@ -861,7 +861,7 @@ mod tests {
         assert!(nelems[0].is_array());
         assert!(nelems[1].is_object());
         // Non-array returns None.
-        let ot = parse_to_dom(r#"{"a":1}"#).unwrap();
+        let ot = parse_to_dom(r#"{"a":1}"#, None).unwrap();
         assert!(ot.root().unwrap().array_iter().is_none());
     }
 }

@@ -255,7 +255,7 @@ mod tests {
     use super::JsonRef;
 
     fn run_tape(json: &'static str) -> Option<Dom<'static>> {
-        parse_to_dom(json)
+        parse_to_dom(json, None)
     }
 
     // -----------------------------------------------------------------------

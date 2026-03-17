@@ -466,7 +466,7 @@ impl<'de> VariantAccess<'de> for DomRef<'de, 'de> {
 /// #[derive(Deserialize, PartialEq, Debug)]
 /// struct Point { x: i64, y: i64 }
 ///
-/// let tape = parse_to_dom(r#"{"x":1,"y":2}"#).unwrap();
+/// let tape = parse_to_dom(r#"{"x":1,"y":2}"#, None).unwrap();
 /// let root = tape.root().unwrap();
 /// let p: Point = from_taperef(root).unwrap();
 /// assert_eq!(p, Point { x: 1, y: 2 });

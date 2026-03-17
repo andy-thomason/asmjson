@@ -27,9 +27,10 @@ asmjson = { version = "0.2", features = ["serde"] }
 ```
 
 ```rust
-use asmjson::{parse_to_dom, JsonRef};
+use asmjson::{dom_parser, JsonRef};
 
-let tape = parse_to_dom(r#"{"name":"Alice","age":30}"#).unwrap();
+let parse = dom_parser(); // selects AVX-512BW or SWAR at runtime
+let tape = parse(r#"{"name":"Alice","age":30}"#, None).unwrap();
 
 assert_eq!(tape.root().get("name").as_str(), Some("Alice"));
 assert_eq!(tape.root().get("age").as_i64(), Some(30));
@@ -186,17 +187,21 @@ assert_eq!(total, 91 + 78 + 85);
 
 ## API
 
-Four entry points are provided:
-
 | Function                   | Safety   | Description |
 |----------------------------|----------|-------------|
-| `parse_to_dom(src)`       | safe     | Parse to a flat `Dom`; portable SWAR classifier. |
-| `parse_with(src, writer)`  | safe     | Drive a custom `JsonWriter`; portable SWAR classifier. |
+| `dom_parser()`             | safe     | Returns a CPUID-selected `fn(&str, Option<usize>) -> Option<Dom<'_>>`. |
+| `sax_parser()`             | safe     | Returns a `SaxParser`; call `.parse(src, writer)` to drive any `Sax` writer. |
+| `parse_to_dom(src, cap)`   | safe     | Parse to a flat `Dom`; portable SWAR classifier. |
+| `parse_with(src, writer)`  | safe     | Drive a custom `Sax` writer; portable SWAR classifier. |
 | `unsafe parse_to_dom_zmm(src, cap)` | **unsafe** | Parse to `Dom`; AVX-512BW assembly (direct tape write). |
-| `unsafe parse_with_zmm(src, writer)` | **unsafe** | Drive a `JsonWriter`; AVX-512BW assembly (vtable dispatch). |
+| `unsafe parse_with_zmm(src, writer)` | **unsafe** | Drive a `Sax` writer; AVX-512BW assembly (vtable dispatch). |
 
-The `unsafe` variants require a CPU with AVX-512BW support.  Calling them on
-an unsupported CPU will trigger an illegal instruction fault.
+Prefer `dom_parser()` / `sax_parser()` for new code — they perform a one-time
+CPUID check and return either the AVX-512BW or the SWAR path; no `unsafe` is
+required at the call site.
+
+The `unsafe` low-level variants require a CPU with AVX-512BW support.  Calling
+them on an unsupported CPU will trigger an illegal instruction fault.
 
 ## Conformance note
 

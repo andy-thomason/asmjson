@@ -1,12 +1,8 @@
-#[cfg(feature = "stats")]
-use asmjson::parse_to_dom as parse_json;
 #[cfg(target_arch = "x86_64")]
 use asmjson::parse_to_dom_zmm;
 #[cfg(target_arch = "x86_64")]
 use asmjson::parse_with_zmm;
 use asmjson::sax::Sax;
-#[cfg(feature = "stats")]
-use asmjson::stats;
 use asmjson::{DomEntryKind, parse_to_dom};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
@@ -126,54 +122,6 @@ fn simd_sum_lens(v: &simd_json::BorrowedValue<'_>) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Stats helper — compiled in only with --features stats
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "stats")]
-fn print_stats(label: &str, data: &str) {
-    stats::reset();
-    let _ = parse_json(data);
-    let s = stats::get();
-    let total = s.value_whitespace
-        + s.string_chars
-        + s.string_escape
-        + s.key_chars
-        + s.key_escape
-        + s.key_end
-        + s.after_colon
-        + s.atom_chars
-        + s.object_start
-        + s.array_start
-        + s.after_value;
-    eprintln!(
-        "\n=== State entries: {label} ({} bytes, {total} total dispatches) ===",
-        data.len()
-    );
-    let mut rows = vec![
-        ("ValueWhitespace", s.value_whitespace),
-        ("StringChars", s.string_chars),
-        ("StringEscape", s.string_escape),
-        ("KeyChars", s.key_chars),
-        ("KeyEscape", s.key_escape),
-        ("KeyEnd", s.key_end),
-        ("AfterColon", s.after_colon),
-        ("AtomChars", s.atom_chars),
-        ("ObjectStart", s.object_start),
-        ("ArrayStart", s.array_start),
-        ("AfterValue", s.after_value),
-    ];
-    rows.sort_by(|a, b| b.1.cmp(&a.1));
-    for (name, count) in rows {
-        if count > 0 {
-            eprintln!(
-                "  {name:<20} {count:>12}  ({:.1}%)",
-                count as f64 / total as f64 * 100.0
-            );
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Data generators
 // ---------------------------------------------------------------------------
 
@@ -277,8 +225,6 @@ const TARGET: usize = 10 * 1024 * 1024; // 10 MiB
 
 fn bench_string_array(c: &mut Criterion) {
     let data = gen_string_array(TARGET);
-    #[cfg(feature = "stats")]
-    print_stats("string_array", &data);
     let mut group = c.benchmark_group("string_array");
     group.throughput(Throughput::Bytes(data.len() as u64));
     #[cfg(target_arch = "x86_64")]
@@ -297,7 +243,7 @@ fn bench_string_array(c: &mut Criterion) {
     });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
-            let tape = parse_to_dom(&data).unwrap();
+            let tape = parse_to_dom(&data, None).unwrap();
             std::hint::black_box(dom_sum_lens(&tape))
         });
     });
@@ -325,8 +271,6 @@ fn bench_string_array(c: &mut Criterion) {
 
 fn bench_string_object(c: &mut Criterion) {
     let data = gen_string_object(TARGET);
-    #[cfg(feature = "stats")]
-    print_stats("string_object", &data);
     let mut group = c.benchmark_group("string_object");
     group.throughput(Throughput::Bytes(data.len() as u64));
     #[cfg(target_arch = "x86_64")]
@@ -345,7 +289,7 @@ fn bench_string_object(c: &mut Criterion) {
     });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
-            let tape = parse_to_dom(&data).unwrap();
+            let tape = parse_to_dom(&data, None).unwrap();
             std::hint::black_box(dom_sum_lens(&tape))
         });
     });
@@ -373,8 +317,6 @@ fn bench_string_object(c: &mut Criterion) {
 
 fn bench_mixed(c: &mut Criterion) {
     let data = gen_mixed(TARGET);
-    #[cfg(feature = "stats")]
-    print_stats("mixed", &data);
     let mut group = c.benchmark_group("mixed");
     group.throughput(Throughput::Bytes(data.len() as u64));
     #[cfg(target_arch = "x86_64")]
@@ -393,7 +335,7 @@ fn bench_mixed(c: &mut Criterion) {
     });
     group.bench_function("asmjson/u64", |b| {
         b.iter(|| {
-            let tape = parse_to_dom(&data).unwrap();
+            let tape = parse_to_dom(&data, None).unwrap();
             std::hint::black_box(dom_sum_lens(&tape))
         });
     });
