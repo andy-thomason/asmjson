@@ -2139,3 +2139,47 @@ AVX-512BW machine the assembly path is selected automatically.
 ### Commit
 
 `601c6ee` examples: CPUID auto-dispatch; remove -- zmm CLI flag
+
+## Session — Parallel mmap JSON-lines example
+
+### What was done
+
+Added `examples/mmap_parallel.rs`: a new example that memory-maps a JSON
+Lines file, partitions it into ~1 MiB chunks at `\n` boundaries, then
+parses every chunk in parallel using Rayon.  CPUID auto-selects the
+AVX-512BW assembly path when available.
+
+Also added `memmap2 = "0.9"` and `rayon = "1"` to `[dev-dependencies]` in
+`Cargo.toml`.
+
+### Design decisions
+
+**Why iterate lines within each chunk?**  `parse_with` / `parse_with_zmm`
+each expect a single well-formed JSON value.  A raw ~1 MiB slice of a JSON
+Lines file contains hundreds of individual JSON objects separated by `\n`,
+not one big document.  The solution is to partition the mmap into
+newline-aligned chunks for Rayon — giving each thread a contiguous region
+to work with — and then iterate over the individual lines within each chunk
+before calling the parser.
+
+**Chunk boundary alignment.**  The `split_at_newlines` function scans
+forward from the nominal chunk end to the next `\n`, ensuring no line
+is split across chunks.  Lines whose trailing `\n` falls past the end
+of file are still handled correctly.
+
+**`StringCounter` accumulation.**  Each Rayon task returns a
+`StringCounter`; `reduce` combines them with simple integer addition,
+avoiding any shared state or locking.
+
+### Results
+
+On a 12.7 MB test file (200 k lines) split into 13 chunks:
+
+```
+keys   found : 600000   (3 keys/line × 200 000 lines)
+strings found: 200000   (1 string value/line × 200 000 lines)
+```
+
+### Commit
+
+`6a055ea` examples: add mmap_parallel JSON-lines parallel SAX counter
