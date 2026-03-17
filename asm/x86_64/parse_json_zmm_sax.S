@@ -447,14 +447,13 @@ parse_json_zmm_sax:
     mov     rdx, qword ptr [rbp + LOC_UNESCAPE]  // arg3: &mut String
     call    unescape_str
     // Read the decoded string back from the String struct.
-    // String layout (Rust): { ptr: *mut u8, cap: usize, len: usize } = (ptr,cap,len).
-    // Actually String = Vec<u8> = { ptr: NonNull<u8>, cap: usize, len: usize }.
-    // In memory: [ptr_word, cap_word, len_word] each 8 bytes on 64-bit.
-    // The ptr_word is actually a NonNull wrapper = just the pointer value.
+    // String = Vec<u8>; as of Rust ≥ 2024 edition the in-memory layout is
+    //   { cap: usize, ptr: *mut u8, len: usize }  at offsets { 0, 8, 16 }.
+    // (Older Rust used { ptr, cap, len }; empirically verified with
+    //  a layout probe that w0=cap, w1=heap_ptr, w2=len.)
     mov     r8,  qword ptr [rbp + LOC_UNESCAPE]  // &String
-    mov     rsi, qword ptr [r8]                   // box_ptr  (= String.ptr.pointer())
-    mov     rdx, qword ptr [r8 + 16]              // box_len  (= String.len)
-    mov     qword ptr [rbp + LOC_COFF], rcx       // already saved but refresh
+    mov     rsi, qword ptr [r8 + 8]               // box_ptr  (= String.ptr, offset 8)
+    mov     rdx, qword ptr [r8 + 16]              // box_len  (= String.len, offset 16)
     mov     rdi, rbx
     call    qword ptr [r14 + VTAB_ESCAPED_STRING]
     mov     rcx, qword ptr [rbp + LOC_COFF]
@@ -581,8 +580,8 @@ parse_json_zmm_sax:
     mov     rdx, qword ptr [rbp + LOC_UNESCAPE]  // &mut String
     call    unescape_str
     mov     r8,  qword ptr [rbp + LOC_UNESCAPE]
-    mov     rsi, qword ptr [r8]                   // box_ptr
-    mov     rdx, qword ptr [r8 + 16]              // box_len
+    mov     rsi, qword ptr [r8 + 8]               // box_ptr  (= String.ptr, offset 8)
+    mov     rdx, qword ptr [r8 + 16]              // box_len  (= String.len, offset 16)
     mov     rdi, rbx
     call    qword ptr [r14 + VTAB_ESCAPED_KEY]
     mov     rcx, qword ptr [rbp + LOC_COFF]

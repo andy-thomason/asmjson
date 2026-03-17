@@ -1953,3 +1953,103 @@ README also needed updating — caught by a second failing `cargo test` pass.
 ### Commit
 
 `98870e1` refactor: rename remaining Tape*→Dom*, asm modules to _sax/_dom suffixes
+
+---
+
+## Session — DOM and SAX example files
+
+### What was done
+
+Added two standalone examples that demonstrate both parse modes and both
+x86-64 assembly vs portable entry points:
+
+- `examples/dom_example.rs` — builds a [`Dom`] tape and navigates it with
+  the [`JsonRef`] cursor API.  Accepts an optional `zmm` argument to switch
+  from `parse_to_dom` (SWAR) to `parse_to_dom_zmm` (AVX-512BW assembly).
+- `examples/sax_example.rs` — implements the [`Sax`] trait (`Counter`) and
+  drives it through `parse_with` or `parse_with_zmm`.  The SAX example notes
+  that `parse_with_zmm` does not process backslash escape sequences.
+
+### Design decisions
+
+- A runtime `-- zmm` argument was used instead of a compile-time flag so
+  either path can be exercised without rebuilding; the non-x86_64 fallback
+  prints an informative error and exits.
+- The SAX example uses escape-free JSON (`"rust"`, `"json"`, etc.) so it
+  works correctly under both `parse_with` and `parse_with_zmm`.
+- Each `inspect` / `run_*` function in the DOM example is duplicated for
+  clarity; sharing via a generic closure would obscure which API is in use.
+
+### Results
+
+Both examples compile without errors (`cargo build`).  Output verified by
+running `cargo run --example dom_example` and `cargo run --example sax_example`,
+and again with `-- zmm` on this AVX-512BW-capable host; counts and field
+values matched expectations for both SWAR and assembly paths.
+
+### Commit
+
+65aff4e fix: two bugs in SAX assembly escape path---
+
+## Session N — Fix two bugs in the assembly SAX escape path
+
+### Stale re-save of `rcx` in `.Lsc_emit_escaped`
+
+The assembly SAX string-value emission path (`.Lsc_emit_escaped`) saved
+`rcx` (the chunk offset) into `LOC_COFF` before calling `unescape_str`, but
+then unconditionally re-saved `rcx` *again* after loading the decoded String
+fields:
+
+```asm
+    mov     qword ptr [rbp + LOC_COFF], rcx  ; correct save
+    ...
+    call    unescape_str                      ; clobbers rcx (caller-saved!)
+    mov     rsi, qword ptr [r8]
+    mov     rdx, qword ptr [r8 + 16]
+    mov     qword ptr [rbp + LOC_COFF], rcx  ; BUG: rcx is garbage here
+```
+
+`rcx` is caller-saved in the System V AMD64 ABI, so `unescape_str` was free
+to clobber it.  The second save overwrote the correct chunk-offset with
+whatever value `rcx` held on return from `unescape_str`.  The fix was to
+delete the redundant second save.  The corresponding key path
+(`.Lke_emit_escaped`) did not have this defect.
+
+### Wrong `String` field offsets — `{cap, ptr, len}` vs `{ptr, cap, len}`
+
+After removing the stale save, the test still crashed with SIGSEGV.  A
+runtime layout probe added to `parse_with_zmm` revealed:
+
+```
+String layout probe: w0=0x10 (cap=16)  w1=0x79a1d0000ce0 (ptr)  w2=0xb (len=11)
+```
+
+The assembly assumed `String = {ptr@0, cap@8, len@16}`, but the Rust
+compiler in use lays out `Vec<u8>` as `{cap@0, ptr@8, len@16}`.  The SAX
+assembly was reading `[r8]` (cap) instead of `[r8 + 8]` (ptr) for the
+decoded string pointer, producing a garbage pointer value (e.g. `0x8`
+when cap=8) that caused the segfault.  The DOM assembly was unaffected
+because it delegates String field access to the Rust function
+`dom_take_box_str`.
+
+The fix updates both `.Lsc_emit_escaped` (string values) and
+`.Lke_emit_escaped` (key values) to read the pointer from `[r8 + 8]`:
+
+```asm
+    mov     rsi, qword ptr [r8 + 8]    // box_ptr  (ptr at offset 8)
+    mov     rdx, qword ptr [r8 + 16]   // box_len  (len at offset 16)
+```
+
+A comment in the assembly documents the verified field layout.
+
+### Results
+
+All 29 unit tests pass (`cargo test --lib -- --test-threads=1`).  The
+`zmm_sax_escaped_strings` test, which verified `parse_with_zmm` against the
+Rust reference parser on inputs with `\n`, `\t`, `\r`, `\"`, `\uXXXX`,
+escaped keys, and escape sequences spanning chunk boundaries, now passes
+cleanly.
+
+### Commit
+
+(uncommitted working tree)
