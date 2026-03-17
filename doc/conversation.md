@@ -2103,4 +2103,39 @@ contains any `String` field offsets.
 
 ### Commit
 
-612de06 refactor: change escaped_string/escaped_key to take &str
+612de06 refactor: change escaped_string/escaped_key to take &str`612de06` refactor: change escaped_string/escaped_key to take &str
+
+## Session — Example CPUID auto-dispatch
+
+### What was done
+
+Refactored `examples/dom_example.rs` and `examples/sax_example.rs` to
+auto-select the AVX-512BW assembly path at runtime using
+`is_x86_feature_detected!("avx512bw")` instead of requiring a `-- zmm`
+command-line flag.
+
+- Removed the two-function table and `-- zmm` usage from both doc comments.
+- `dom_example`: merged `inspect` / `inspect_zmm` into a single
+  `inspect(label: &str, tape: Dom)` function; `main` does the CPUID check
+  and calls the appropriate parser, then passes the result to `inspect`.
+  Added `Dom` to the `use` imports.
+- `sax_example`: replaced `run_portable` and `run_zmm` with a single
+  `report(label: &str, counts: Counter)` function; `main` does the CPUID
+  check and calls the appropriate parser, then passes counts to `report`.
+  Removed the `std::env::args` CLI argument parsing entirely.
+
+### Design decisions
+
+Mirrored the same CPUID-dispatch pattern in both examples for consistency.
+The `#[cfg(target_arch = "x86_64")]` guard around the
+`is_x86_feature_detected!(...)` check ensures the examples compile and run
+correctly on non-x86_64 targets (falling back to the portable path).
+
+### Results
+
+Both examples compile without warnings and produce correct output.  On an
+AVX-512BW machine the assembly path is selected automatically.
+
+### Commit
+
+`601c6ee` examples: CPUID auto-dispatch; remove -- zmm CLI flag
