@@ -6,21 +6,14 @@
 //!
 //! CPUID auto-selects the AVX-512BW assembly path when available.
 //!
+//! On startup the example generates `/tmp/file.jsonl` (~1 GiB, 10 million
+//! lines, each a JSON object with keys and values at least 10 characters
+//! long), then immediately maps and parses it.
+//!
 //! ## Usage
 //!
 //! ```sh
-//! cargo run --example mmap_parallel -- path/to/file.jsonl
-//! ```
-//!
-//! ## Generating a test file
-//!
-//! ```sh
-//! python3 -c "
-//! import json, random, string
-//! for i in range(100_000):
-//!     print(json.dumps({'id': i, 'name': ''.join(random.choices(string.ascii_lowercase, k=8)), 'value': random.random()}))
-//! " > /tmp/test.jsonl
-//! cargo run --example mmap_parallel -- /tmp/test.jsonl
+//! cargo run --release --example mmap_parallel
 //! ```
 
 #[cfg(target_arch = "x86_64")]
@@ -28,7 +21,12 @@ use asmjson::parse_with_zmm;
 use asmjson::{Sax, parse_with};
 use memmap2::Mmap;
 use rayon::prelude::*;
-use std::{env, fs, path::PathBuf};
+use std::{
+    fs,
+    io::{BufWriter, Write},
+    path::Path,
+    time::Instant,
+};
 
 // ---------------------------------------------------------------------------
 // SAX writer — counts string values and keys
@@ -146,32 +144,60 @@ fn split_at_newlines(data: &[u8], chunk_size: usize) -> Vec<&[u8]> {
 }
 
 // ---------------------------------------------------------------------------
+// Test-file generation
+// ---------------------------------------------------------------------------
+
+// Each generated line is exactly 100 bytes including the trailing '\n':
+//   {"identifier":"user{i:012}","description":"item{i:012}","subcategory":"type{i:012}"}
+// keys  : "identifier"(10), "description"(11), "subcategory"(11)  — all ≥ 10 chars
+// values: 16 chars each  (4-char prefix + 12-digit index)          — all ≥ 10 chars
+const LINE_BYTES: u64 = 100;
+const TARGET_BYTES: u64 = 1 << 30; // 1 GiB
+const FILE_PATH: &str = "/tmp/file.jsonl";
+
+fn create_test_file(path: &Path) {
+    let n_lines = TARGET_BYTES / LINE_BYTES;
+    println!(
+        "generating {path} ({n_lines} lines, {} MiB) …",
+        TARGET_BYTES >> 20,
+        path = path.display(),
+    );
+    let t = Instant::now();
+    let file = fs::File::create(path).expect("cannot create file");
+    let mut w = BufWriter::with_capacity(4 << 20, file);
+    for i in 0..n_lines {
+        writeln!(
+            w,
+            "{{\"identifier\":\"user{i:012}\",\"description\":\"item{i:012}\",\"subcategory\":\"type{i:012}\"}}"
+        )
+        .expect("write failed");
+    }
+    w.flush().expect("flush failed");
+    println!("  done in {:.2?}", t.elapsed());
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 fn main() {
-    let path: PathBuf = env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        eprintln!("usage: mmap_parallel <file.jsonl>");
-        std::process::exit(1);
-    });
+    let path = Path::new(FILE_PATH);
+    create_test_file(path);
 
-    let file = fs::File::open(&path).unwrap_or_else(|e| {
-        eprintln!("cannot open {}: {e}", path.display());
-        std::process::exit(1);
-    });
-
-    // SAFETY: we hold a shared read-only view of the file and do not modify
-    // it or allow the OS to truncate it while the mapping is live.
+    let file = fs::File::open(path).expect("cannot open file");
+    // SAFETY: we created the file ourselves; the mapping is read-only and
+    // the file is not modified or truncated while the mapping is live.
     let mmap = unsafe { Mmap::map(&file) }.expect("mmap failed");
 
     let chunks = split_at_newlines(&mmap, CHUNK_SIZE);
     println!(
-        "file  : {} bytes  →  {} chunk(s) of ~{} KiB",
-        mmap.len(),
+        "parsing {} MiB  →  {} chunk(s) of ~{} KiB …",
+        mmap.len() >> 20,
         chunks.len(),
         CHUNK_SIZE / 1024,
     );
 
+    let t = Instant::now();
     let totals: StringCounter = chunks
         .par_iter()
         .map(|chunk| {
@@ -183,6 +209,7 @@ fn main() {
             a.keys += b.keys;
             a
         });
+    println!("  done in {:.2?}", t.elapsed());
 
     println!("keys   found : {}", totals.keys);
     println!("strings found: {}", totals.strings);
