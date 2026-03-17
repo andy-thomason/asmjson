@@ -2361,3 +2361,32 @@ revised efficiency to ~56 %.
 ### Commit
 
 `b50d502` example: add mem_bw_zmm — ZMM temporal and NT load bandwidth benchmark
+
+## Session N — serde example timing
+
+### Add timing to serde_example
+
+Added `std::time::Instant` timing around the two main phases in `run()`:
+
+- `parse_to_dom` (or `parse_to_dom_zmm` on AVX-512BW): measures the JSON
+  parse + tape-build time.
+- `from_taperef`: measures the serde deserialization walk over the tape.
+
+Both durations are printed in milliseconds alongside the existing record
+count output.  Example output on Ryzen 9 9955HX with a ~1 MiB input:
+
+```
+parse_to_dom_zmm + from_taperef  (AVX-512BW): decoded 8066 records, last id=8065
+  parse_to_dom: 1.212 ms  |  from_taperef: 1.755 ms
+```
+
+### Design decisions
+
+`Instant::now()` / `elapsed()` is sufficient accuracy for a single-run
+example (sub-100 µs jitter on this machine).  No warmup loop or statistics
+are needed; users who want repeatable microbenchmarks should use the Criterion
+benches.
+
+### Commit
+
+`dd4bbe7` example: add parse_to_dom and from_taperef timing to serde_example
