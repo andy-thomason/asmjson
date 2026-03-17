@@ -68,6 +68,21 @@ Run it yourself:
 cargo run --release --example mmap_parallel
 ```
 
+### Serde deserialization (`serde_example`)
+
+End-to-end throughput for parsing a ~1 MiB mixed JSON array and deserialising
+it into a `Vec<Record>` via `serde` + `from_taperef` (AVX-512BW path,
+Ryzen 9 9955HX):
+
+| Phase           | Time     | Throughput  |
+|-----------------|:--------:|:-----------:|
+| `parse_to_dom_zmm` | 1.1 ms | **769 MiB/s** |
+| `from_taperef`  | 1.9 ms   | **428 MiB/s** |
+
+```sh
+cargo run --release --features serde --example serde_example
+```
+
 Note: `asmjson/sax` and `asmjson/dom` are implemented entirely in hand-written
 x86-64 assembly using AVX-512BW instructions.  They require a CPU with
 AVX-512BW support (Ice Lake or later on Intel, Zen 4 or later on AMD) and are
