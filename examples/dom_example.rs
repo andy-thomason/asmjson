@@ -3,17 +3,15 @@
 //! Demonstrates building a [`Dom`] tape and navigating it with the
 //! [`JsonRef`] cursor API.
 //!
-//! At runtime the example checks CPUID.  If the CPU supports AVX-512BW the
-//! fast hand-written assembly path ([`parse_to_dom_zmm`]) is used;
-//! otherwise it falls back to the portable SWAR path ([`parse_to_dom`]).
+//! [`dom_parser`] performs a one-time CPUID check and returns a function
+//! pointer that dispatches to AVX-512BW assembly or the portable SWAR
+//! path as appropriate.
 //!
 //! ```sh
 //! cargo run --example dom_example
 //! ```
 
-#[cfg(target_arch = "x86_64")]
-use asmjson::parse_to_dom_zmm;
-use asmjson::{Dom, JsonRef, parse_to_dom};
+use asmjson::{Dom, JsonRef, dom_parser};
 
 const SRC: &str = r#"
 {
@@ -58,14 +56,7 @@ fn inspect(label: &str, tape: Dom) {
 }
 
 fn main() {
-    #[cfg(target_arch = "x86_64")]
-    if is_x86_feature_detected!("avx512bw") {
-        // SAFETY: CPUID confirmed AVX-512BW is available.
-        let tape = unsafe { parse_to_dom_zmm(SRC, None) }.expect("parse failed");
-        inspect("parse_to_dom_zmm  (AVX-512BW assembly)", tape);
-        return;
-    }
-
-    let tape = parse_to_dom(SRC).expect("parse failed");
-    inspect("parse_to_dom  (portable SWAR)", tape);
+    let parse = dom_parser();
+    let tape = parse(SRC, None).expect("parse failed");
+    inspect("dom_parser", tape);
 }

@@ -5,17 +5,14 @@
 //!
 //! The example [`Counter`] writer counts every scalar kind in the input.
 //!
-//! At runtime the example checks CPUID.  If the CPU supports AVX-512BW the
-//! fast hand-written assembly path ([`parse_with_zmm`]) is used;
-//! otherwise it falls back to the portable SWAR path ([`parse_with`]).
+//! [`sax_parser`] performs a one-time CPUID check and returns a handle that
+//! dispatches to AVX-512BW assembly or the portable SWAR path as appropriate.
 //!
 //! ```sh
 //! cargo run --example sax_example
 //! ```
 
-#[cfg(target_arch = "x86_64")]
-use asmjson::parse_with_zmm;
-use asmjson::{Sax, parse_with};
+use asmjson::{Sax, sax_parser};
 
 // ---------------------------------------------------------------------------
 // Custom SAX writer
@@ -103,14 +100,7 @@ fn report(label: &str, counts: Counter) {
 }
 
 fn main() {
-    #[cfg(target_arch = "x86_64")]
-    if is_x86_feature_detected!("avx512bw") {
-        // SAFETY: CPUID confirmed AVX-512BW is available.
-        let counts = unsafe { parse_with_zmm(SRC, Counter::default()) }.expect("parse failed");
-        report("parse_with_zmm  (AVX-512BW assembly)", counts);
-        return;
-    }
-
-    let counts = parse_with(SRC, Counter::default()).expect("parse failed");
-    report("parse_with  (portable SWAR)", counts);
+    let parser = sax_parser();
+    let counts = parser.parse(SRC, Counter::default()).expect("parse failed");
+    report("sax_parser", counts);
 }

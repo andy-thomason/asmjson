@@ -16,9 +16,7 @@
 //! cargo run --release --example mmap_parallel
 //! ```
 
-#[cfg(target_arch = "x86_64")]
-use asmjson::parse_with_zmm;
-use asmjson::{Sax, parse_with};
+use asmjson::{Sax, sax_parser};
 use memmap2::Mmap;
 use rayon::prelude::*;
 use std::{
@@ -82,44 +80,17 @@ impl<'src> Sax<'src> for StringCounter {
 
 const CHUNK_SIZE: usize = 1 << 20; // 1 MiB
 
-/// Parse one line using the AVX-512BW assembly path.
-/// The caller must have already verified `avx512bw` support via CPUID.
-#[cfg(target_arch = "x86_64")]
-fn parse_line_into_zmm(line: &str, out: &mut StringCounter) {
-    // SAFETY: caller confirmed AVX-512BW is available.
-    if let Some(c) = unsafe { parse_with_zmm(line, StringCounter::default()) } {
-        out.strings += c.strings;
-        out.keys += c.keys;
-    }
-}
-
-/// Parse one line using the portable SWAR path.
-fn parse_line_into_rust(line: &str, out: &mut StringCounter) {
-    if let Some(c) = parse_with(line, StringCounter::default()) {
-        out.strings += c.strings;
-        out.keys += c.keys;
-    }
-}
-
 /// Parse every non-empty line in a chunk, returning total counts.
-/// The parser variant is chosen once at the top of the function — avoiding a
-/// redundant CPUID check on every line — by using two separate loops.
-fn parse_chunk(chunk: &str) -> StringCounter {
+/// `parser` was constructed once before entering the parallel loop.
+fn parse_chunk(chunk: &str, parser: asmjson::SaxParser) -> StringCounter {
     let mut out = StringCounter::default();
-    #[cfg(target_arch = "x86_64")]
-    if is_x86_feature_detected!("avx512bw") {
-        for line in chunk.lines() {
-            let line = line.trim();
-            if !line.is_empty() {
-                parse_line_into_zmm(line, &mut out);
-            }
-        }
-        return out;
-    }
     for line in chunk.lines() {
         let line = line.trim();
         if !line.is_empty() {
-            parse_line_into_rust(line, &mut out);
+            if let Some(c) = parser.parse(line, StringCounter::default()) {
+                out.strings += c.strings;
+                out.keys += c.keys;
+            }
         }
     }
     out
@@ -214,11 +185,12 @@ fn main() {
 
     let bytes = mmap.len();
     let t = Instant::now();
+    let parser = sax_parser(); // CPUID check done once here
     let totals: StringCounter = chunks
         .par_iter()
         .map(|chunk| {
             let s = std::str::from_utf8(chunk).expect("non-UTF-8 data in chunk");
-            parse_chunk(s)
+            parse_chunk(s, parser)
         })
         .reduce(StringCounter::default, |mut a, b| {
             a.strings += b.strings;

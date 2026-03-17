@@ -553,6 +553,7 @@ pub fn dom_parser() -> for<'a> fn(&'a str, Option<usize>) -> Option<Dom<'a>> {
 ///
 /// Stores the result of a CPUID check performed at construction time so that
 /// repeated `.parse()` calls pay only one branch.
+#[derive(Copy, Clone)]
 pub struct SaxParser {
     #[cfg(target_arch = "x86_64")]
     zmm: bool,

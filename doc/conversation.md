@@ -2390,3 +2390,40 @@ benches.
 ### Commit
 
 `dd4bbe7` example: add parse_to_dom and from_taperef timing to serde_example
+
+## Session — use dom_parser / sax_parser in examples
+
+### What was done
+
+Updated the three remaining examples (`sax_example.rs`, `dom_example.rs`,
+`mmap_parallel.rs`) to use the safe CPUID-dispatching helpers `sax_parser()`
+and `dom_parser()` introduced in `3fa487c`.
+
+`SaxParser` was given `#[derive(Copy, Clone)]` so it can be captured by value
+in Rayon parallel closures (`mmap_parallel.rs`).
+
+In `mmap_parallel.rs` the two separate `parse_line_into_zmm` /
+`parse_line_into_rust` helper functions and the manual `is_x86_feature_detected!`
+guard inside `parse_chunk` were removed.  `parse_chunk` now takes a
+`SaxParser` argument; `sax_parser()` is called once in `main()` and the
+`Copy` value is captured by the Rayon closure.
+
+### Design decisions
+
+Removing the two helper functions reduces the example from ~235 lines to
+~175 lines with no loss of functionality.  Passing `SaxParser` by value (copy)
+into `parse_chunk` is idiomatic for a trivially-copyable handle; an alternative
+would be passing `&SaxParser` and relying on `Sync`, but by-value is cleaner
+when `Copy` is available.
+
+`serde_example.rs` was already updated to use `dom_parser()` in `3fa487c` and
+required no further changes.
+
+### Results
+
+All 29 library tests pass.  Both `sax_example` and `dom_example` run correctly,
+and `mmap_parallel` compiles cleanly with zero warnings.
+
+### Commit
+
+`f79d93d` use dom_parser/sax_parser in examples, add Copy+Clone to SaxParser
