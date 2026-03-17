@@ -2183,3 +2183,42 @@ strings found: 200000   (1 string value/line × 200 000 lines)
 ### Commit
 
 `6a055ea` examples: add mmap_parallel JSON-lines parallel SAX counter
+
+## Session — mmap_parallel self-generates its test file
+
+### What was done
+
+Reworked `examples/mmap_parallel.rs` so that `main` first creates
+`/tmp/file.jsonl` (1 GiB, ~10.7 million lines) before mapping and parsing
+it, removing the CLI path argument entirely.
+
+Each generated line is exactly 100 bytes including the trailing `\n`:
+
+```
+{"identifier":"user000000000000","description":"item000000000000","subcategory":"type000000000000"}
+```
+
+Keys: "identifier" (10), "description" (11), "subcategory" (11) — all ≥ 10 chars.
+Values: 16-char strings (4-char prefix + 12-digit line index) — all ≥ 10 chars.
+1 073 741 800 bytes ÷ 100 = 10 737 418 lines → exactly 1 GiB.
+
+### Design decisions
+
+Used a `BufWriter` with a 4 MiB buffer for fast sequential writes.  The
+format string uses escaped braces (`{{`/`}}`) in a regular string literal
+rather than a raw string, avoiding raw-string delimiter collisions.
+
+`Instant` timing is printed separately for file generation and for parsing.
+
+### Results
+
+On this machine:
+
+- File generation: 1.15 s
+- Parse (1024 × ~1 MiB chunks, Rayon + AVX-512BW): 36 ms
+- keys found: 32 212 254  (10 737 418 × 3)
+- strings found: 32 212 254  (10 737 418 × 3)
+
+### Commit
+
+`0f70426` examples: mmap_parallel generates its own 1 GiB test file
