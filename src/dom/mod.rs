@@ -305,6 +305,7 @@ impl<'a> DomEntry<'a> {
     /// For `String` entries: returns the text with the source-JSON lifetime `'a`,
     /// enabling zero-copy deserialization.  Returns `None` for `EscapedString`
     /// (heap-allocated) and for all non-string kinds.
+    #[cfg(feature = "serde")]
     #[inline]
     pub(crate) fn source_string(&self) -> Option<&'a str> {
         if self.kind() == DomEntryKind::String {
@@ -313,6 +314,7 @@ impl<'a> DomEntry<'a> {
             None
         }
     }
+
     /// Returns the key text if this is `Key` or `EscapedKey`, else `None`.
     #[inline]
     pub fn as_key(&self) -> Option<&str> {
