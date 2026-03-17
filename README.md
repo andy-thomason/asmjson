@@ -16,6 +16,16 @@ string bodies to be skipped in a single operation.
 
 ## Quick start
 
+Add to your `Cargo.toml`:
+
+```toml
+# without serde
+asmjson = "0.2"
+
+# with serde deserialization support
+asmjson = { version = "0.2", features = ["serde"] }
+```
+
 ```rust
 use asmjson::{parse_to_dom, JsonRef};
 
