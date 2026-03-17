@@ -35,13 +35,13 @@ impl<'src> Sax<'src> for LenSumWriter {
     fn string(&mut self, s: &'src str) {
         self.total += s.len();
     }
-    fn escaped_string(&mut self, s: Box<str>) {
+    fn escaped_string(&mut self, s: &str) {
         self.total += s.len();
     }
     fn key(&mut self, s: &'src str) {
         self.total += s.len();
     }
-    fn escaped_key(&mut self, s: Box<str>) {
+    fn escaped_key(&mut self, s: &str) {
         self.total += s.len();
     }
     fn start_object(&mut self) {}

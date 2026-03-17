@@ -459,16 +459,17 @@ impl<'a> Sax<'a> for DomWriter<'a> {
     fn string(&mut self, s: &'a str) {
         self.entries.push(DomEntry::string_entry(s));
     }
-    fn escaped_string(&mut self, s: Box<str>) {
+    fn escaped_string(&mut self, s: &str) {
         self.has_escapes = true;
-        self.entries.push(DomEntry::escaped_string_entry(s));
+        self.entries
+            .push(DomEntry::escaped_string_entry(Box::from(s)));
     }
     fn key(&mut self, s: &'a str) {
         self.entries.push(DomEntry::key_entry(s));
     }
-    fn escaped_key(&mut self, s: Box<str>) {
+    fn escaped_key(&mut self, s: &str) {
         self.has_escapes = true;
-        self.entries.push(DomEntry::escaped_key_entry(s));
+        self.entries.push(DomEntry::escaped_key_entry(Box::from(s)));
     }
     fn start_object(&mut self) {
         let idx = self.entries.len();

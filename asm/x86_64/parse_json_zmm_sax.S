@@ -36,9 +36,9 @@
 //   + 32   bool_val    (&mut self, v: bool)
 //   + 40   number      (&mut self, s_ptr: *const u8, s_len: usize)
 //   + 48   string      (&mut self, s_ptr: *const u8, s_len: usize)
-//   + 56   escaped_string(&mut self, box_ptr: *mut u8, box_len: usize)
+//   + 56   escaped_string(&mut self, s_ptr: *const u8, s_len: usize)
 //   + 64   key         (&mut self, s_ptr: *const u8, s_len: usize)
-//   + 72   escaped_key (&mut self, box_ptr: *mut u8, box_len: usize)
+//   + 72   escaped_key (&mut self, s_ptr: *const u8, s_len: usize)
 //   + 80   start_object(&mut self)
 //   + 88   end_object  (&mut self)
 //   + 96   start_array (&mut self)
@@ -439,7 +439,7 @@ parse_json_zmm_sax:
 
 .Lsc_emit_escaped:
     // Owned: call unescape_str(raw_ptr, raw_len, unescape_buf)
-    //        then call writer.escaped_string(box_ptr, box_len)
+    //        then call writer.escaped_string(s_ptr, s_len)
     mov     qword ptr [rbp + LOC_COFF], rcx
     // rsi = raw_ptr, rdx = raw_len already set
     mov     rdi, rsi                    // arg1: raw_ptr
@@ -573,7 +573,7 @@ parse_json_zmm_sax:
     jmp     .Lchunk_fetch
 
 .Lke_emit_escaped:
-    // Unescape into unescape_buf, then call writer.escaped_key(box_ptr, box_len).
+    // Unescape into unescape_buf, then call writer.escaped_key(s_ptr, s_len).
     mov     qword ptr [rbp + LOC_COFF], rcx
     mov     rdi, qword ptr [rbp + LOC_KEY_PTR]   // raw_ptr
     mov     rsi, qword ptr [rbp + LOC_KEY_LEN]   // raw_len

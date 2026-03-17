@@ -2052,4 +2052,55 @@ cleanly.
 
 ### Commit
 
-(uncommitted working tree)
+f6bd9f4 fix: two bugs in SAX assembly escape path
+
+---
+
+## Session N+1 — Eliminate String layout assumptions by changing escaped_string/escaped_key to &str
+
+### Motivation
+
+The previous fix for the SAX assembly SIGSEGV revealed the root cause:
+the assembly was reading `String` fields at hard-coded offsets assuming
+`{ptr@0, cap@8, len@16}`, but the Rust compiler in use laid out `Vec<u8>`
+as `{cap@0, ptr@8, len@16}`.  Rather than just updating the offsets and
+hoping the layout stays stable, the approach was changed to eliminate the
+need to read `String` fields from assembly entirely.
+
+### Design decision
+
+The `Sax` trait methods `escaped_string` and `escaped_key` previously took
+`Box<str>` so the writer could own the decoded text.  The assembly
+trampolines were responsible for constructing the `Box<str>` by reading
+`ptr` and `len` from the `unescape_buf` `String` struct.
+
+Changing the signature to `&str` (matching `string` and `key`) means the
+trampolines need only cast the raw `(ptr, len)` they already receive to a
+`&str` — the same one-liner pattern used for all other string methods.
+No `String` field access in assembly is required at all.
+
+The `&str` is a short-lived borrow of `unescape_buf`'s heap buffer.  It
+is valid for the duration of the vtable call.  Writers that only inspect
+the value (benchmarks, examples) incur zero allocation.  Writers that
+need ownership (e.g. `DomWriter`) copy with `Box::from(s)` internally.
+
+### Changes
+
+- `src/sax.rs`: `Sax` trait — `Box<str>` → `&str`.
+- `src/lib.rs`: `WriterForZmm` trait and blanket impl updated; trampolines
+  for `zw_escaped_string` / `zw_escaped_key` reduced to one-liners;
+  SWAR `parse_json_impl` call sites changed from `.as_str().into()` to
+  `.as_str()`; test `EventLog` signatures updated.
+- `src/dom/mod.rs`: `DomWriter::escaped_string` / `escaped_key` now take
+  `&str` and do `Box::from(s)` to preserve internal `Box<str>` ownership.
+- `examples/sax_example.rs`, `benches/parse.rs`: method signatures updated.
+- `asm/x86_64/parse_json_zmm_sax.S`: comment updated (`box_ptr` → `s_ptr`).
+
+### Results
+
+All 29 unit tests pass.  Benchmarks compile.  The assembly no longer
+contains any `String` field offsets.
+
+### Commit
+
+612de06 refactor: change escaped_string/escaped_key to take &str

@@ -59,9 +59,9 @@ pub(crate) trait WriterForZmm {
     unsafe fn wfz_bool_val(&mut self, v: bool);
     unsafe fn wfz_number(&mut self, ptr: *const u8, len: usize);
     unsafe fn wfz_string(&mut self, ptr: *const u8, len: usize);
-    unsafe fn wfz_escaped_string(&mut self, s: Box<str>);
+    unsafe fn wfz_escaped_string(&mut self, ptr: *const u8, len: usize);
     unsafe fn wfz_key(&mut self, ptr: *const u8, len: usize);
-    unsafe fn wfz_escaped_key(&mut self, s: Box<str>);
+    unsafe fn wfz_escaped_key(&mut self, ptr: *const u8, len: usize);
     unsafe fn wfz_start_object(&mut self);
     unsafe fn wfz_end_object(&mut self);
     unsafe fn wfz_start_array(&mut self);
@@ -92,7 +92,8 @@ impl<'a, W: Sax<'a>> WriterForZmm for W {
         };
         self.string(s)
     }
-    unsafe fn wfz_escaped_string(&mut self, s: Box<str>) {
+    unsafe fn wfz_escaped_string(&mut self, ptr: *const u8, len: usize) {
+        let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
         self.escaped_string(s)
     }
     unsafe fn wfz_key(&mut self, ptr: *const u8, len: usize) {
@@ -103,7 +104,8 @@ impl<'a, W: Sax<'a>> WriterForZmm for W {
         };
         self.key(s)
     }
-    unsafe fn wfz_escaped_key(&mut self, s: Box<str>) {
+    unsafe fn wfz_escaped_key(&mut self, ptr: *const u8, len: usize) {
+        let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
         self.escaped_key(s)
     }
     unsafe fn wfz_start_object(&mut self) {
@@ -138,12 +140,7 @@ unsafe extern "C" fn zw_string<W: WriterForZmm>(data: *mut (), ptr: *const u8, l
 }
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" fn zw_escaped_string<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
-    unsafe {
-        let s = Box::from(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            ptr, len,
-        )));
-        (*(data as *mut W)).wfz_escaped_string(s)
-    }
+    unsafe { (*(data as *mut W)).wfz_escaped_string(ptr, len) }
 }
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" fn zw_key<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
@@ -151,12 +148,7 @@ unsafe extern "C" fn zw_key<W: WriterForZmm>(data: *mut (), ptr: *const u8, len:
 }
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" fn zw_escaped_key<W: WriterForZmm>(data: *mut (), ptr: *const u8, len: usize) {
-    unsafe {
-        let s = Box::from(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            ptr, len,
-        )));
-        (*(data as *mut W)).wfz_escaped_key(s)
-    }
+    unsafe { (*(data as *mut W)).wfz_escaped_key(ptr, len) }
 }
 #[cfg(target_arch = "x86_64")]
 unsafe extern "C" fn zw_start_object<W: WriterForZmm>(data: *mut ()) {
@@ -752,7 +744,7 @@ fn parse_json_impl<'a, W: Sax<'a>>(
                             let raw = &src[str_start..pos + chunk_offset];
                             if str_escaped {
                                 unescape_str(raw, unescape_buf);
-                                writer.escaped_string(unescape_buf.as_str().into());
+                                writer.escaped_string(unescape_buf.as_str());
                             } else {
                                 writer.string(raw);
                             }
@@ -806,7 +798,7 @@ fn parse_json_impl<'a, W: Sax<'a>>(
                         b':' => {
                             if current_key_escaped {
                                 unescape_str(current_key_raw, unescape_buf);
-                                writer.escaped_key(unescape_buf.as_str().into());
+                                writer.escaped_key(unescape_buf.as_str());
                             } else {
                                 writer.key(current_key_raw);
                             }
@@ -1441,9 +1433,9 @@ mod tests {
                 self.0.push_str(s);
                 self.0.push(';');
             }
-            fn escaped_string(&mut self, s: Box<str>) {
+            fn escaped_string(&mut self, s: &str) {
                 self.0.push_str("es:");
-                self.0.push_str(&s);
+                self.0.push_str(s);
                 self.0.push(';');
             }
             fn key(&mut self, s: &str) {
@@ -1451,9 +1443,9 @@ mod tests {
                 self.0.push_str(s);
                 self.0.push(';');
             }
-            fn escaped_key(&mut self, s: Box<str>) {
+            fn escaped_key(&mut self, s: &str) {
                 self.0.push_str("ek:");
-                self.0.push_str(&s);
+                self.0.push_str(s);
                 self.0.push(';');
             }
             fn start_object(&mut self) {

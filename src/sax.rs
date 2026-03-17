@@ -23,11 +23,15 @@ pub trait Sax<'src> {
     /// A JSON string value with no escape sequences; `s` borrows from the source.
     fn string(&mut self, s: &'src str);
     /// A JSON string value that contained escape sequences; `s` is the decoded text.
-    fn escaped_string(&mut self, s: Box<str>);
+    /// Unlike [`string`](Sax::string), the bytes do not come from the source JSON;
+    /// store a copy if you need to keep the value beyond this call.
+    fn escaped_string(&mut self, s: &str);
     /// An object key with no escape sequences; `s` borrows from the source.
     fn key(&mut self, s: &'src str);
     /// An object key that contained escape sequences; `s` is the decoded text.
-    fn escaped_key(&mut self, s: Box<str>);
+    /// Unlike [`key`](Sax::key), the bytes do not come from the source JSON;
+    /// store a copy if you need to keep the value beyond this call.
+    fn escaped_key(&mut self, s: &str);
     /// Opening `{` of an object.
     fn start_object(&mut self);
     /// Closing `}` of an object.

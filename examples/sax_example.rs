@@ -64,8 +64,8 @@ impl<'src> Sax<'src> for Counter {
         self.strings += 1;
     }
 
-    // Escaped string value — `s` is the heap-allocated decoded text.
-    fn escaped_string(&mut self, _s: Box<str>) {
+    // Escaped string value — decoded text, valid only for this call.
+    fn escaped_string(&mut self, _s: &str) {
         self.strings += 1;
     }
 
@@ -74,8 +74,8 @@ impl<'src> Sax<'src> for Counter {
         self.keys += 1;
     }
 
-    // Escaped object key.
-    fn escaped_key(&mut self, _s: Box<str>) {
+    // Escaped object key — decoded text, valid only for this call.
+    fn escaped_key(&mut self, _s: &str) {
         self.keys += 1;
     }
 
