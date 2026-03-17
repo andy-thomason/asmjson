@@ -104,17 +104,17 @@ fn run(label: &str, data: &str) {
     assert_eq!(records[1].score, Some(0.0)); // i/2 = 0
 
     let bytes = data.len() as f64;
-    let gib = (1u64 << 30) as f64;
-    let parse_gibs = bytes / (parse_elapsed.as_secs_f64() * gib);
-    let serde_gibs = bytes / (serde_elapsed.as_secs_f64() * gib);
+    let mib = (1u64 << 20) as f64;
+    let parse_mibs = bytes / (parse_elapsed.as_secs_f64() * mib);
+    let serde_mibs = bytes / (serde_elapsed.as_secs_f64() * mib);
     println!(
-        "{label}: decoded {} records, last id={}\n  parse_to_dom: {:.3} ms  ({:.2} GiB/s)  |  from_taperef: {:.3} ms  ({:.2} GiB/s)",
+        "{label}: decoded {} records, last id={}\n  parse_to_dom: {:.3} ms  ({:.0} MiB/s)  |  from_taperef: {:.3} ms  ({:.0} MiB/s)",
         records.len(),
         records.last().unwrap().id,
         parse_elapsed.as_secs_f64() * 1000.0,
-        parse_gibs,
+        parse_mibs,
         serde_elapsed.as_secs_f64() * 1000.0,
-        serde_gibs,
+        serde_mibs,
     );
 }
 
