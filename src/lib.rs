@@ -200,7 +200,6 @@ unsafe extern "C" {
         writer_data: *mut (),
         writer_vtab: *const ZmmVtab,
         frames_buf: *mut u8,
-        unescape_buf: *mut String,
     ) -> bool;
 
     /// Entry point assembled from `asm/x86_64/parse_json_zmm_dom.S`.
@@ -603,8 +602,7 @@ pub unsafe fn parse_to_dom_zmm<'a>(
 /// For maximum throughput on CPUs with AVX-512BW, use [`parse_with_zmm`].
 pub fn parse_with<'a, W: Sax<'a>>(src: &'a str, writer: W) -> Option<W::Output> {
     let mut frames_buf = [FrameKind::Object; MAX_JSON_DEPTH];
-    let mut unescape_buf = String::new();
-    parse_json_impl(src, writer, &mut frames_buf, &mut unescape_buf)
+    parse_json_impl(src, writer, &mut frames_buf)
 }
 
 /// Parse `src` using a custom [`JsonWriter`] and the hand-written x86-64
@@ -623,7 +621,6 @@ pub fn parse_with<'a, W: Sax<'a>>(src: &'a str, writer: W) -> Option<W::Output> 
 pub unsafe fn parse_with_zmm<'a, W: Sax<'a>>(src: &'a str, mut writer: W) -> Option<W::Output> {
     let vtab = build_zmm_vtab::<W>();
     let mut frames_buf = [FrameKind::Object; MAX_JSON_DEPTH];
-    let mut unescape_buf = String::new();
     // SAFETY (caller obligation): CPU supports AVX-512BW.
     // SAFETY (internal): writer and src both live for 'a, outlasting this
     // synchronous call.  parse_json_zmm_sax does NOT call finish.
@@ -634,7 +631,6 @@ pub unsafe fn parse_with_zmm<'a, W: Sax<'a>>(src: &'a str, mut writer: W) -> Opt
             &raw mut writer as *mut (),
             &vtab,
             frames_buf.as_mut_ptr() as *mut u8,
-            &raw mut unescape_buf,
         )
     };
     if ok { writer.finish() } else { None }
@@ -644,7 +640,6 @@ fn parse_json_impl<'a, W: Sax<'a>>(
     src: &'a str,
     mut writer: W,
     frames_buf: &mut [FrameKind; MAX_JSON_DEPTH],
-    unescape_buf: &mut String,
 ) -> Option<W::Output> {
     let bytes = src.as_bytes();
     let mut frames_depth: usize = 0;
@@ -743,8 +738,7 @@ fn parse_json_impl<'a, W: Sax<'a>>(
                             bs_count = 0;
                             let raw = &src[str_start..pos + chunk_offset];
                             if str_escaped {
-                                unescape_str(raw, unescape_buf);
-                                writer.escaped_string(unescape_buf.as_str());
+                                writer.escaped_string(raw);
                             } else {
                                 writer.string(raw);
                             }
@@ -797,8 +791,7 @@ fn parse_json_impl<'a, W: Sax<'a>>(
                     match byte {
                         b':' => {
                             if current_key_escaped {
-                                unescape_str(current_key_raw, unescape_buf);
-                                writer.escaped_key(unescape_buf.as_str());
+                                writer.escaped_key(current_key_raw);
                             } else {
                                 writer.key(current_key_raw);
                             }

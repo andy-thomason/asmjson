@@ -19,7 +19,6 @@
 //       void          *writer_data,  // rdx  — data half of dyn JsonWriter
 //       const void   **writer_vtab,  // rcx  — vtable half of dyn JsonWriter
 //       uint8_t       *frames_buf,   // r8   — [FrameKind; 64], u8 per entry
-//       void          *unescape_buf  // r9   — *mut String for escape decoding
 //   );
 //   Returns: al = 1 on success, 0 on error.
 //
@@ -51,12 +50,6 @@
 // ---------------------------------------------------------------------------
 // Caller-provided symbols (from Rust lib with C linkage)
 // ---------------------------------------------------------------------------
-//
-//   bool unescape_str(s_ptr, s_len, out_string_ptr)
-//     Fills *out_string_ptr (a &mut String) with the decoded text.
-//     Declared:  #[unsafe(no_mangle)] #[inline(never)]
-//                pub fn unescape_str(s: &str, out: &mut String)
-//                → (rdi=s_ptr, rsi=s_len, rdx=out_string_ptr)
 //
 //   bool is_valid_json_number_c(ptr, len)
 //     Returns 1 if bytes[..len] form a valid JSON number, else 0.
@@ -98,7 +91,7 @@
 //   [rbp - 24]  saved r13
 //   [rbp - 32]  saved r14
 //   [rbp - 40]  saved r15
-//   [rbp - 48]  unescape_buf ptr         (initialised from arg r9)
+//   [rbp - 48]  (unused padding)
 //   [rbp - 56]  frames_depth             (usize; 0..64)
 //   [rbp - 64]  pos                      (usize; bytes consumed so far)
 //   [rbp - 72]  str_start                (usize; byte offset after opening '"')
@@ -119,7 +112,6 @@
 .intel_syntax noprefix
 
 // Stack-frame byte offsets from rbp
-.equ LOC_UNESCAPE,    -48
 .equ LOC_FDEPTH,      -56
 .equ LOC_POS,         -64
 .equ LOC_STR_START,   -72
@@ -199,7 +191,6 @@ parse_json_zmm_sax:
     mov     rbx, rdx                        // writer_data
     mov     r14, rcx                        // writer_vtab
     mov     r15, r8                         // frames_buf
-    mov     qword ptr [rbp + LOC_UNESCAPE], r9  // unescape_buf
 
     // Initialise local variables.
     xor     eax, eax
@@ -438,23 +429,11 @@ parse_json_zmm_sax:
     jmp     .Lchunk_fetch
 
 .Lsc_emit_escaped:
-    // Owned: call unescape_str(raw_ptr, raw_len, unescape_buf)
-    //        then call writer.escaped_string(s_ptr, s_len)
+    // Pass raw (still-escaped) string directly; callee calls unescape_str.
+    // rsi = raw_ptr, rdx = raw_len already set.
     mov     qword ptr [rbp + LOC_COFF], rcx
-    // rsi = raw_ptr, rdx = raw_len already set
-    mov     rdi, rsi                    // arg1: raw_ptr
-    mov     rsi, rdx                    // arg2: raw_len
-    mov     rdx, qword ptr [rbp + LOC_UNESCAPE]  // arg3: &mut String
-    call    unescape_str
-    // Read the decoded string back from the String struct.
-    // String = Vec<u8>; as of Rust ≥ 2024 edition the in-memory layout is
-    //   { cap: usize, ptr: *mut u8, len: usize }  at offsets { 0, 8, 16 }.
-    // (Older Rust used { ptr, cap, len }; empirically verified with
-    //  a layout probe that w0=cap, w1=heap_ptr, w2=len.)
-    mov     r8,  qword ptr [rbp + LOC_UNESCAPE]  // &String
-    mov     rsi, qword ptr [r8 + 8]               // box_ptr  (= String.ptr, offset 8)
-    mov     rdx, qword ptr [r8 + 16]              // box_len  (= String.len, offset 16)
     mov     rdi, rbx
+    // rsi = raw_ptr, rdx = raw_len already in place
     call    qword ptr [r14 + VTAB_ESCAPED_STRING]
     mov     rcx, qword ptr [rbp + LOC_COFF]
     inc     rcx
@@ -573,16 +552,11 @@ parse_json_zmm_sax:
     jmp     .Lchunk_fetch
 
 .Lke_emit_escaped:
-    // Unescape into unescape_buf, then call writer.escaped_key(s_ptr, s_len).
+    // Pass raw (still-escaped) key directly; callee calls unescape_str.
     mov     qword ptr [rbp + LOC_COFF], rcx
-    mov     rdi, qword ptr [rbp + LOC_KEY_PTR]   // raw_ptr
-    mov     rsi, qword ptr [rbp + LOC_KEY_LEN]   // raw_len
-    mov     rdx, qword ptr [rbp + LOC_UNESCAPE]  // &mut String
-    call    unescape_str
-    mov     r8,  qword ptr [rbp + LOC_UNESCAPE]
-    mov     rsi, qword ptr [r8 + 8]               // box_ptr  (= String.ptr, offset 8)
-    mov     rdx, qword ptr [r8 + 16]              // box_len  (= String.len, offset 16)
     mov     rdi, rbx
+    mov     rsi, qword ptr [rbp + LOC_KEY_PTR]   // raw_ptr
+    mov     rdx, qword ptr [rbp + LOC_KEY_LEN]   // raw_len
     call    qword ptr [r14 + VTAB_ESCAPED_KEY]
     mov     rcx, qword ptr [rbp + LOC_COFF]
     inc     rcx

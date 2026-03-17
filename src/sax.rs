@@ -22,15 +22,16 @@ pub trait Sax<'src> {
     fn number(&mut self, s: &'src str);
     /// A JSON string value with no escape sequences; `s` borrows from the source.
     fn string(&mut self, s: &'src str);
-    /// A JSON string value that contained escape sequences; `s` is the decoded text.
-    /// Unlike [`string`](Sax::string), the bytes do not come from the source JSON;
-    /// store a copy if you need to keep the value beyond this call.
+    /// A JSON string value that contained escape sequences.
+    /// `s` is the **raw** slice from the source JSON, still containing backslash
+    /// sequences (e.g. `\n`, `\uXXXX`).  Call [`crate::unescape_str`] if you
+    /// need the decoded text.
     fn escaped_string(&mut self, s: &str);
     /// An object key with no escape sequences; `s` borrows from the source.
     fn key(&mut self, s: &'src str);
-    /// An object key that contained escape sequences; `s` is the decoded text.
-    /// Unlike [`key`](Sax::key), the bytes do not come from the source JSON;
-    /// store a copy if you need to keep the value beyond this call.
+    /// An object key that contained escape sequences.
+    /// `s` is the **raw** slice from the source JSON, still containing backslash
+    /// sequences.  Call [`crate::unescape_str`] if you need the decoded text.
     fn escaped_key(&mut self, s: &str);
     /// Opening `{` of an object.
     fn start_object(&mut self);
