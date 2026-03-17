@@ -2276,3 +2276,41 @@ All 29 unit tests pass.
 ### Commit
 
 `9c2d164` refactor: escaped_string/escaped_key receive raw source &str; DomWriter unescapes internally
+
+## Session: remove unescape_buf from parse_json_zmm_dom
+
+### What was done
+
+Removed the `unescape_buf: *mut String` parameter from `parse_json_zmm_dom`,
+the hand-written AVX-512BW DOM assembly parser.  Previously the caller
+(`parse_to_dom_zmm`) had to allocate a `String`, pass its raw pointer in as
+the 7th argument, and the assembly would call `unescape_str` (to fill it) and
+then `dom_take_box_str` (to box the result) at each escaped-string/key site.
+
+### Design decisions
+
+The two-call sequence (`unescape_str` + `dom_take_box_str`) was collapsed into
+a single new function `dom_unescape_to_box_str(raw_ptr, raw_len, out_ptr,
+out_len)` that allocates its own `String` internally, decodes the escapes, and
+writes the `Box<str>` pointer and length to the caller-supplied output
+pointers.  This is the same pattern that stabilised the SAX path in the
+previous session — the caller no longer owns an escape buffer.
+
+`dom_take_box_str` was deleted; `unescape_str` is still present and public
+(called from `dom_unescape_to_box_str` and directly from
+`DomWriter::escaped_string/escaped_key`).
+
+On the assembly side `LOC_UNESCAPE` (stack slot `[rbp-48]`) is removed and
+the two external calls at `.Lsc_emit_escaped` and `.Lke_emit_escaped` are each
+replaced by a single `call dom_unescape_to_box_str`.  The `has_escapes_out`
+and `tape_cap` stack arguments shift from `[rbp+24]/[rbp+32]` to
+`[rbp+16]/[rbp+24]` following the removal of the 7th argument.
+
+### Results
+
+29/29 tests green.  No benchmark regression expected (same allocation pattern,
+one fewer external call per escaped token).
+
+### Commit
+
+`da9e8aa` refactor: remove unescape_buf from parse_json_zmm_dom; add dom_unescape_to_box_str
