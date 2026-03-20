@@ -168,6 +168,60 @@ sub-trees in O(1) time.  Because the tape is a single contiguous allocation
 the traversal access pattern is cache-friendly and avoids the pointer-chasing
 overhead of a tree-of-`Box` DOM like `serde_json::Value`.
 
+## Escaped strings and zero-cost drop
+
+JSON string values and object keys may contain backslash escape sequences
+(`\n`, `\t`, `\"`, `\uXXXX`, etc.).  In practice, escape sequences are
+uncommon: real-world datasets — API responses, configuration files, LLM model
+definitions — consist predominantly of plain ASCII keys and values with no
+backslashes at all.  The classifier's backslash bitmask is therefore zero for
+the vast majority of chunks.
+
+When no escape is detected the parser records string and key entries as
+borrows directly into the source buffer: a `DomEntry` of kind `String` or
+`Key` stores a (`ptr`, `len`) pair pointing into the original `&str` slice
+with no allocation.  When a backslash *is* encountered, the escape sequence is
+decoded into a freshly allocated `Box<str>` and stored in an `EscapedString`
+or `EscapedKey` entry; ownership of that heap object transfers into the tape.
+
+This asymmetry creates a memory-management challenge.  Rust requires that
+every element of a `Vec` has its `Drop` implementation called individually
+when the collection is freed.  For a tape with hundreds of thousands of
+entries that are all plain borrows, calling a no-op destructor on each one is
+measurable overhead — it serialises the CPU over a cold allocation that
+otherwise could simply be `free()`d in a single call.
+
+The `Dom` struct carries a single boolean flag `has_escapes` that is set by
+the assembly entry point (via an output parameter `has_escapes_out`) and by
+the `DomWriter` whenever an `EscapedString` or `EscapedKey` is pushed.  The
+`Drop` implementation for `Dom` tests this flag and takes two entirely
+different paths:
+
+```rust
+impl<'a> Drop for Dom<'a> {
+    fn drop(&mut self) {
+        if !self.has_escapes {
+            // No entry owns heap memory.  Bypass per-element Drop calls
+            // by zeroing the length before the Vec is freed.
+            unsafe { self.entries.set_len(0) };
+        }
+        // self.entries drops here; with len == 0 no element destructors run.
+    }
+}
+```
+
+When `has_escapes` is false — the common case — `set_len(0)` tricks the Vec's
+own destructor into running zero element drops before releasing the backing
+allocation with a single `dealloc` call.  This is sound because no element
+of kind `String`, `Key`, `Number`, `Null`, `Bool`, `StartObject`,
+`EndObject`, `StartArray`, or `EndArray` owns heap memory; their pointers are
+either null or borrow from the source JSON, which outlives the tape.
+
+When `has_escapes` is true the `set_len` shortcut is skipped and each
+`DomEntry` is dropped normally; only the `EscapedString` and `EscapedKey`
+entries have non-trivial destructors, so the overhead is proportional to the
+number of escaped strings rather than the total tape length.
+
 ## Portable SWAR fallback
 
 The SWAR classifier operates on 8 bytes at a time using only integer arithmetic.
@@ -209,8 +263,8 @@ to deserialise into typed Rust structs without the intermediate tape.
 Portions of the Rust wrapper, test suite, and documentation (including this
 paper) were drafted with the assistance of GitHub Copilot (Claude Sonnet).
 All generated code was reviewed, tested, and committed by the human author.
-The hand-written AVX-512BW assembly in `asm/x86_64/` was authored by the
-human author without AI assistance.
+The AI was instumental in finding bugs in the human generated code and in
+creating a deep set of test vectors, this human is most grateful.
 
 # Acknowledgements
 
