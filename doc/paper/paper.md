@@ -10,6 +10,7 @@ tags:
 authors:
   - name: Amy Thomason
     affiliation: 1
+    orcid: 0000-0001-8240-1614
 affiliations:
   - index: 1
     name: Atomic Increment Ltd, United Kingdom
@@ -38,7 +39,7 @@ At the API level `asmjson` offers two usage styles:
 
 On an AMD Ryzen 9 9955HX (Zen 5, AVX-512BW) the library reaches
 **10.93 GiB/s** single-threaded on string-array workloads, and
-**26.6 GiB/s** when 1 024 Rayon tasks parse independent megabyte-sized
+**26.6 GiB/s** when 1 024 Rayon [@rayon] tasks parse independent megabyte-sized
 chunks of a memory-mapped JSON Lines file in parallel.
 
 # Statement of Need
@@ -48,7 +49,7 @@ scientific datasets.  The performance of JSON parsing is consequently a
 practical bottleneck in data ingestion pipelines, language model tooling,
 bioinformatics workflows, and any application that consumes JSON at scale.
 
-Rust's dominant JSON library, `serde_json`, achieves around 2.4 GiB/s on
+Rust's dominant JSON library, `serde_json` [@serde-json], achieves around 2.4 GiB/s on
 string-heavy benchmarks.  Even the fastest competing Rust crates
 (`sonic-rs` [@sonic-rs], `simd-json` [@simd-json]) top out near 7 GiB/s.
 The gap between these libraries and the theoretical bandwidth of modern
@@ -263,7 +264,7 @@ to deserialise into typed Rust structs without the intermediate tape.
 Portions of the Rust wrapper, test suite, and documentation (including this
 paper) were drafted with the assistance of GitHub Copilot (Claude Sonnet).
 All generated code was reviewed, tested, and committed by the human author.
-The AI was instumental in finding bugs in the human generated code and in
+The AI was instrumental in finding bugs in the human generated code and in
 creating a deep set of test vectors, this human is most grateful.
 
 # Acknowledgements
