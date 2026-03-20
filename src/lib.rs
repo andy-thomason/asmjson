@@ -433,10 +433,11 @@ pub fn parse_to_dom<'a>(src: &'a str, initial_capacity: Option<usize>) -> Option
 /// without AVX-512BW support will trigger an illegal instruction fault.  Use
 /// [`parse_to_dom`] for portable code.
 ///
-/// ```rust
+/// ```rust,no_run
 /// #[cfg(target_arch = "x86_64")]
 /// {
 ///     use asmjson::parse_to_dom_zmm;
+///     // SAFETY: caller must verify AVX-512BW support before calling.
 ///     let tape = unsafe { parse_to_dom_zmm(r#"{"x":1}"#, None) }.unwrap();
 ///     use asmjson::JsonRef;
 ///     assert_eq!(tape.root().get("x").as_i64(), Some(1));
