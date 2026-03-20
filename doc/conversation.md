@@ -2507,4 +2507,4 @@ Both invocations were updated to `parse_to_dom(src, None)`.
 **Results** — All 29 unit tests and all 9 (+ 2 ignored) doctests pass locally
 and CI is expected to pass on `ubuntu-latest` (no AVX-512, zmm tests skip).
 
-**Commit** — pending (bump to 0.2.3)
+**Commit** — e4e68f4 fix: gate zmm tests on avx512bw; fix doctest arity; bump to 0.2.3
