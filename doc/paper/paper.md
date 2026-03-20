@@ -223,7 +223,7 @@ When `has_escapes` is true the `set_len` shortcut is skipped and each
 entries have non-trivial destructors, so the overhead is proportional to the
 number of escaped strings rather than the total tape length.
 
-## Portable SWAR fallback
+## Portable SWAR (SIMD-Within-A-Register) fallback
 
 The SWAR classifier operates on 8 bytes at a time using only integer arithmetic.
 It tests for whitespace by subtracting `0x2020202020202020` and checking the
