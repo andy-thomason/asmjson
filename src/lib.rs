@@ -1560,17 +1560,34 @@ mod tests {
         assert_eq!(tape.root().unwrap().array_iter().unwrap().count(), 200);
     }
 
+    /// Regression test for the carry-borrow false positive in `eq_byte`.
+    ///
+    /// The classic `has_zero_byte` SWAR trick falsely reports byte `n` as a
+    /// match when byte `n-1` is a genuine match (XORs to 0x00) *and* byte `n`
+    /// XORs to 0x01.  For `target = '"'` (0x22), this fires whenever `'#'`
+    /// (0x23 = 0x22 + 1) appears immediately after a real `'"'`, causing the
+    /// parser to see a phantom closing quote inside the string.
+    ///
+    /// All three inputs below are the exact tokens from
+    /// `Qwen2.5-0.5B/tokenizer.json` that were rejected by the pre-fix parser.
     #[test]
-    fn dom_parse_tokenizer_json() {
-        let path = "/home/amy/atomicincrement/llm-play-2/models/Qwen2.5-0.5B/tokenizer.json";
-        let src =
-            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
-        let dom = parse_to_dom(&src, None)
-            .unwrap_or_else(|| panic!("parse_to_dom failed to parse {path}"));
-        assert!(
-            dom.root().map(|r| r.is_object()).unwrap_or(false),
-            "expected top-level object in {path}"
-        );
+    fn swar_eq_byte_quote_false_positive_regression() {
+        use crate::JsonRef;
+
+        // `"#\\"` — '#' at chunk position 1 is 0x22+1, false positive fires
+        // at position 1 of the first chunk.  Decoded value: `#\`
+        let dom = parse_to_dom("\"#\\\\\"", None).expect("\"#\\\\\" should parse");
+        assert_eq!(dom.root().as_str(), Some("#\\"));
+
+        // `"# \\"` — same root cause; '#' at position 1.  Decoded value: `# \`
+        let dom = parse_to_dom("\"# \\\\\"", None).expect("\"# \\\\\" should parse");
+        assert_eq!(dom.root().as_str(), Some("# \\"));
+
+        // `"=\\\""#"` — the genuine '"' lands at chunk position 5; '#' at
+        // position 6 triggers the false positive mid-string.
+        // Decoded value: `=\"#`
+        let dom = parse_to_dom("\"=\\\\\\\"#\"", None).expect("\"=\\\\\\\"#\\\" should parse");
+        assert_eq!(dom.root().as_str(), Some("=\\\"#"));
     }
 
     /// Collect every raw JSON string token (including surrounding quotes) from
