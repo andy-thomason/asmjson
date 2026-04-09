@@ -91,7 +91,7 @@
 //   [rbp - 24]  saved r13
 //   [rbp - 32]  saved r14
 //   [rbp - 40]  saved r15
-//   [rbp - 48]  (unused padding)
+//   [rbp - 48]  bs_parity                (u8;  0 = even backslash run, 1 = odd)
 //   [rbp - 56]  frames_depth             (usize; 0..64)
 //   [rbp - 64]  pos                      (usize; bytes consumed so far)
 //   [rbp - 72]  str_start                (usize; byte offset after opening '"')
@@ -127,6 +127,7 @@
 .equ LOC_BSL,         -152
 .equ LOC_DELIMS,      -160
 .equ LOC_COFF,        -168     // saved chunk_offset around vtable calls
+.equ LOC_BS_PARITY,   -48      // backslash-run parity (u8; 0 = even, 1 = odd)
 
 // Vtable offsets for ZmmVtab (#[repr(C)], 8 bytes per fn-pointer)
 //   Matches struct ZmmVtab field order in lib.rs exactly.
@@ -199,6 +200,7 @@ parse_json_zmm_sax:
     mov     qword ptr [rbp + LOC_STR_START], rax
     mov     qword ptr [rbp + LOC_ATOM_START],rax
     mov     byte  ptr [rbp + LOC_STR_ESC],   al    // str_escaped = false
+    mov     byte  ptr [rbp + LOC_BS_PARITY], al    // bs_parity = 0
     mov     qword ptr [rbp + LOC_KEY_PTR],   rax
     mov     qword ptr [rbp + LOC_KEY_LEN],   rax
     mov     byte  ptr [rbp + LOC_KEY_ESC],   al    // key_escaped = false
@@ -368,7 +370,8 @@ parse_json_zmm_sax:
     add     rax, rcx
     inc     rax
     mov     qword ptr [rbp + LOC_STR_START], rax
-    mov     byte ptr [rbp + LOC_STR_ESC], 0    // str_escaped = false
+    mov     byte ptr [rbp + LOC_STR_ESC],   0  // str_escaped = false
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0  // reset parity
     inc     rcx                                 // past the '"'
     lea     r11, [rip + .Lerror_from_r11]       // EOF mid-string = error
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
@@ -386,18 +389,19 @@ parse_json_zmm_sax:
 //   Scan for the first unescaped '"' or '\' within a string value.
 // ===========================================================================
 .Lstring_chars:
-    // interesting = (backslashes | (quotes & ~(backslashes << 1))) >> chunk_offset
+    // interesting = (backslashes | quotes) >> chunk_offset, then tzcnt.
+    // If skip > 0, a literal run broke any backslash chain; reset parity.
     mov     rax, qword ptr [rbp + LOC_BSL]
-    mov     rdx, rax
-    shl     rdx, 1                      // backslashes << 1
-    mov     rsi, qword ptr [rbp + LOC_QUOTES]
-    andn    rsi, rdx, rsi               // quotes & ~(backslashes << 1)
-    or      rax, rsi                    // backslashes | unescaped_quotes
-    shr     rax, cl                     // >> chunk_offset
+    or      rax, qword ptr [rbp + LOC_QUOTES]    // backslashes | quotes
+    shr     rax, cl                               // >> chunk_offset
     tzcnt   rax, rax
-    add     rcx, rax                    // advance to first interesting byte
+    test    rax, rax
+    jz      .Lsc_no_parity_reset
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0    // broke the backslash run
+.Lsc_no_parity_reset:
+    add     rcx, rax                              // advance to first interesting byte
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
-    jae     .Lrefetch_string_chars      // nothing interesting in this chunk
+    jae     .Lrefetch_string_chars                // nothing interesting in this chunk
 
     // Which byte is it?
     mov     rax, qword ptr [rbp + LOC_POS]
@@ -405,6 +409,10 @@ parse_json_zmm_sax:
     movzx   eax, byte ptr [rax + rcx]
     cmp     al, '\\'
     je      .Lsc_escape
+
+    // '"': close string, unless an odd-parity backslash run precedes it.
+    cmp     byte ptr [rbp + LOC_BS_PARITY], 0
+    jne     .Lsc_escaped_quote
 
     // '"' — end of string.
     // raw slice: [str_start .. pos + chunk_offset]
@@ -422,7 +430,7 @@ parse_json_zmm_sax:
     call    qword ptr [r14 + VTAB_STRING]
     mov     rcx, qword ptr [rbp + LOC_COFF]
     inc     rcx
-    lea     r11, [rip + .Lerror_from_r11]
+    lea     r11, [rip + .Leof_after_value]  // EOF after a complete value is success
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
     jb      .Lafter_value
     lea     r10, [rip + .Lafter_value]
@@ -437,14 +445,27 @@ parse_json_zmm_sax:
     call    qword ptr [r14 + VTAB_ESCAPED_STRING]
     mov     rcx, qword ptr [rbp + LOC_COFF]
     inc     rcx
-    lea     r11, [rip + .Lerror_from_r11]
+    lea     r11, [rip + .Leof_after_value]  // EOF after a complete value is success
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
     jb      .Lafter_value
     lea     r10, [rip + .Lafter_value]
     jmp     .Lchunk_fetch
 
+.Lsc_escaped_quote:
+    // '"' after odd-parity backslash run: it is escaped.  Mark string as escaped,
+    // reset parity, and advance past the '"' to continue scanning the string body.
+    mov     byte ptr [rbp + LOC_STR_ESC], 1
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0
+    inc     rcx
+    lea     r11, [rip + .Lerror_from_r11]
+    cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
+    jb      .Lstring_chars
+    lea     r10, [rip + .Lstring_chars]
+    jmp     .Lchunk_fetch
+
 .Lsc_escape:
-    // '\' found: mark string as escaped, advance past the backslash.
+    // '\' found: toggle backslash-run parity; mark string as escaped.
+    xor     byte ptr [rbp + LOC_BS_PARITY], 1
     mov     byte ptr [rbp + LOC_STR_ESC], 1
     inc     rcx                             // past '\' (escaped char follows)
     lea     r11, [rip + .Lerror_from_r11]
@@ -465,13 +486,13 @@ parse_json_zmm_sax:
 // ===========================================================================
 .Lkey_chars:
     mov     rax, qword ptr [rbp + LOC_BSL]
-    mov     rdx, rax
-    shl     rdx, 1
-    mov     rsi, qword ptr [rbp + LOC_QUOTES]
-    andn    rsi, rdx, rsi
-    or      rax, rsi
+    or      rax, qword ptr [rbp + LOC_QUOTES]
     shr     rax, cl
     tzcnt   rax, rax
+    test    rax, rax
+    jz      .Lkc_no_parity_reset
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0
+.Lkc_no_parity_reset:
     add     rcx, rax
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
     jae     .Lrefetch_key_chars
@@ -481,6 +502,10 @@ parse_json_zmm_sax:
     movzx   eax, byte ptr [rax + rcx]
     cmp     al, '\\'
     je      .Lkc_escape
+
+    // '"': close key, unless an odd-parity backslash run precedes it.
+    cmp     byte ptr [rbp + LOC_BS_PARITY], 0
+    jne     .Lkc_escaped_quote
 
     // '"' — end of key.  Store raw slice for later emission in key_end.
     mov     rax, qword ptr [rbp + LOC_STR_START]
@@ -500,7 +525,20 @@ parse_json_zmm_sax:
     lea     r10, [rip + .Lkey_end]
     jmp     .Lchunk_fetch
 
+.Lkc_escaped_quote:
+    // '"' after odd-parity run in a key: it is escaped.  Mark as escaped, reset
+    // parity, and advance past the '"' to continue scanning the key body.
+    mov     byte ptr [rbp + LOC_STR_ESC], 1
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0
+    inc     rcx
+    lea     r11, [rip + .Lerror_from_r11]
+    cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
+    jb      .Lkey_chars
+    lea     r10, [rip + .Lkey_chars]
+    jmp     .Lchunk_fetch
+
 .Lkc_escape:
+    xor     byte ptr [rbp + LOC_BS_PARITY], 1
     mov     byte ptr [rbp + LOC_STR_ESC], 1
     inc     rcx
     lea     r11, [rip + .Lerror_from_r11]
@@ -644,7 +682,8 @@ parse_json_zmm_sax:
     add     rax, rcx
     inc     rax
     mov     qword ptr [rbp + LOC_STR_START], rax
-    mov     byte ptr [rbp + LOC_STR_ESC], 0
+    mov     byte ptr [rbp + LOC_STR_ESC],   0
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0
     inc     rcx
     lea     r11, [rip + .Lerror_from_r11]
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
@@ -735,7 +774,8 @@ parse_json_zmm_sax:
     add     rax, rcx
     inc     rax
     mov     qword ptr [rbp + LOC_STR_START], rax
-    mov     byte ptr [rbp + LOC_STR_ESC], 0
+    mov     byte ptr [rbp + LOC_STR_ESC],   0
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0
     inc     rcx
     lea     r11, [rip + .Lerror_from_r11]
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]
@@ -869,7 +909,8 @@ parse_json_zmm_sax:
     add     rax, rcx
     inc     rax
     mov     qword ptr [rbp + LOC_STR_START], rax
-    mov     byte ptr [rbp + LOC_STR_ESC], 0
+    mov     byte ptr [rbp + LOC_STR_ESC],   0
+    mov     byte ptr [rbp + LOC_BS_PARITY], 0
     inc     rcx
     lea     r11, [rip + .Lerror_from_r11]
     cmp     rcx, qword ptr [rbp + LOC_CHUNK_LEN]

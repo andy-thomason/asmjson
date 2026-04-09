@@ -1504,14 +1504,12 @@ mod tests {
         // String that spans more than one 64-byte chunk and contains an escape.
         let long = format!(r#"{{"{}\n":"{}\t"}}"#, "x".repeat(70), "y".repeat(70));
         zmm_sax_matches(&long);
-        // Note: inputs with even runs of backslashes before a closing quote (e.g.
-        // `\\"`) require the parity-counting fix in the assembly too; tested via
-        // parse_with in rust_even_backslash_before_quote below.
+        // Note: inputs with even runs of backslashes before a closing quote are
+        // handled by the backslash-parity fix now applied to the assembly string
+        // parsers; they are covered end-to-end by swar_eq_byte_quote_false_positive_regression*.
     }
 
-    // Rust-path-only test for even backslash runs before a closing quote.
-    // The assembly SAX path has not yet been updated to count backslash parity,
-    // so this test drives parse_to_dom (SWAR) directly.
+    // Portable Rust-path test for even backslash runs before a closing quote.
     #[test]
     fn rust_even_backslash_before_quote() {
         use crate::JsonRef;
@@ -1574,20 +1572,41 @@ mod tests {
     fn swar_eq_byte_quote_false_positive_regression() {
         use crate::JsonRef;
 
-        // `"#\\"` — '#' at chunk position 1 is 0x22+1, false positive fires
-        // at position 1 of the first chunk.  Decoded value: `#\`
-        let dom = parse_to_dom("\"#\\\\\"", None).expect("\"#\\\\\" should parse");
-        assert_eq!(dom.root().as_str(), Some("#\\"));
+        // Each tuple: (raw JSON input, expected decoded string value)
+        let cases: &[(&str, &str)] = &[
+            // `"#\\"` — '#' at chunk position 1 is 0x22+1, false positive fires
+            // at position 1 of the first chunk.  Decoded value: `#\`
+            ("\"#\\\\\"", "#\\"),
+            // `"# \\"` — same root cause; '#' at position 1.  Decoded value: `# \`
+            ("\"# \\\\\"", "# \\"),
+            // `"=\\\""#"` — the genuine '"' lands at chunk position 5; '#' at
+            // position 6 triggers the false positive mid-string.
+            // Decoded value: `=\"#`
+            ("\"=\\\\\\\"#\"", "=\\\"#"),
+        ];
 
-        // `"# \\"` — same root cause; '#' at position 1.  Decoded value: `# \`
-        let dom = parse_to_dom("\"# \\\\\"", None).expect("\"# \\\\\" should parse");
-        assert_eq!(dom.root().as_str(), Some("# \\"));
+        for &(src, expected) in cases {
+            // Portable SWAR path.
+            let dom =
+                parse_to_dom(src, None).unwrap_or_else(|| panic!("parse_to_dom rejected {src:?}"));
+            assert_eq!(
+                dom.root().as_str(),
+                Some(expected),
+                "DOM SWAR mismatch for {src:?}"
+            );
 
-        // `"=\\\""#"` — the genuine '"' lands at chunk position 5; '#' at
-        // position 6 triggers the false positive mid-string.
-        // Decoded value: `=\"#`
-        let dom = parse_to_dom("\"=\\\\\\\"#\"", None).expect("\"=\\\\\\\"#\\\" should parse");
-        assert_eq!(dom.root().as_str(), Some("=\\\"#"));
+            // AVX-512BW assembly path.
+            #[cfg(target_arch = "x86_64")]
+            if is_x86_feature_detected!("avx512bw") {
+                let dom = unsafe { parse_to_dom_zmm(src, None) }
+                    .unwrap_or_else(|| panic!("parse_to_dom_zmm rejected {src:?}"));
+                assert_eq!(
+                    dom.root().as_str(),
+                    Some(expected),
+                    "DOM zmm mismatch for {src:?}"
+                );
+            }
+        }
     }
 
     /// SAX-path regression for the same `eq_byte` false-positive bug.
@@ -1623,9 +1642,18 @@ mod tests {
         ];
 
         for &(src, expected_raw) in cases {
+            // Portable SWAR path.
             let got = parse_with(src, Capture(None))
                 .unwrap_or_else(|| panic!("parse_with rejected {src:?}"));
-            assert_eq!(got, expected_raw, "SAX raw string mismatch for {src:?}");
+            assert_eq!(got, expected_raw, "SAX SWAR mismatch for {src:?}");
+
+            // AVX-512BW assembly path.
+            #[cfg(target_arch = "x86_64")]
+            if is_x86_feature_detected!("avx512bw") {
+                let got = unsafe { parse_with_zmm(src, Capture(None)) }
+                    .unwrap_or_else(|| panic!("parse_with_zmm rejected {src:?}"));
+                assert_eq!(got, expected_raw, "SAX zmm mismatch for {src:?}");
+            }
         }
     }
 }
