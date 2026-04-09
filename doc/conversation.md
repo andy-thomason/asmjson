@@ -2566,3 +2566,69 @@ unused but harmless.
 and metadata present. All citation keys resolve.
 
 **Commit** — bump to 0.2.4 (b4478be), Cargo.lock (8012cdf)
+
+---
+
+## Session — carry-free eq_byte fix and tokenizer.json tests
+
+### Add tokenizer.json integration tests and fix SWAR false-positive bug
+
+**What was done** — Two new tests were added to `src/lib.rs`:
+
+- `dom_parse_tokenizer_json`: reads the 6 MB
+  `Qwen2.5-0.5B/tokenizer.json` file and parses it with `parse_to_dom`,
+  asserting that the root value is an object.
+- `dom_parse_double_backslash_strings`: uses a helper
+  `json_strings_with_double_backslash` that walks the raw JSON source and
+  extracts every quoted-string token whose raw bytes contain at least one
+  `\\` (double-backslash) escape sequence.  Each extracted token is then
+  parsed as a standalone JSON string value; all 790 such tokens must parse
+  successfully.
+
+Running the tests revealed that both failed.  The tokenizer.json parse
+failed because the `classify_u64` SWAR byte-equality helper had a
+false-positive bug; the token-level tests pinpointed the exact inputs
+triggering it.
+
+**Design decisions** — The root cause was in the `has_zero_byte` trick
+used by `eq_byte`:
+
+```
+(v − 0x0101…) & !v & 0x8080…
+```
+
+This well-known algorithm has false positives: when byte `i` equals zero
+(a genuine match) and byte `i+1` has value `0x01`, the borrow generated
+by subtracting `0x01` from `0x00` propagates into position `i+1`, setting
+its high bit and causing it to be reported as a match.
+
+Concretely, the `"` byte (0x22) immediately followed by `#` (0x23 =
+0x22 + 1 = 0x22 XOR 0x22 + 1 → XOR result 0x01) triggered the
+false positive.  The parser would land on position 1 (`#`) thinking it was
+a closing quote, then dispatch the `_ =>` arm of the StringChars match,
+which closes the string early and returns `AfterValue`.  The subsequent
+backslashes caused an `Error`.
+
+The fix replaces `eq_byte` with a carry-free formula:
+
+```
+let x = v ^ broadcast(b);
+!(((x & 0x7f7f…) + 0x7f7f…) | x) & 0x8080…
+```
+
+For a byte `x_i`:
+- If `x_i == 0` (genuine match): `(0 & 0x7f) + 0x7f = 0x7f`; `0x7f | 0 =
+  0x7f`; `!0x7f & 0x80 = 0x80`. ✓
+- If `x_i == 0x01` (previously problematic): `(1 & 0x7f) + 0x7f = 0x80`;
+  `0x80 | 0x01 = 0x81`; `!0x81 & 0x80 = 0`. ✓ No false positive.
+- For any other non-zero byte: `(x_i & 0x7f) + 0x7f ≥ 0x80`, so bit 7
+  is set; `!(…) & 0x80 = 0`. ✓
+
+The addition `(x & 0x7f7f…) + 0x7f7f…` is carry-free across bytes
+because each summand is at most `0x7f` and the maximum sum `0x7f + 0x7f =
+0xfe < 0xff`, so no carry ever crosses a byte boundary.
+
+**Results** — All 31 unit tests pass.  Both new integration tests pass.
+The full test suite is green.
+
+**Commit** — e77a521 fix: carry-free eq_byte to eliminate false-positive quote detection
