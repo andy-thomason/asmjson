@@ -2632,3 +2632,62 @@ because each summand is at most `0x7f` and the maximum sum `0x7f + 0x7f =
 The full test suite is green.
 
 **Commit** — e77a521 fix: carry-free eq_byte to eliminate false-positive quote detection
+
+---
+
+## Session N — Assembly backslash-parity fix; zmm regression coverage
+
+### Assembly `backslashes << 1` parity bug
+
+**What was done** — Both `parse_json_zmm_sax.S` and `parse_json_zmm_dom.S`
+used the formula
+
+```
+interesting = backslashes | (quotes & ~(backslashes << 1))
+```
+
+to try to suppress escaped quotes from the interesting-byte scan.  Shifting
+backslashes left by one correctly filters a single `\"` (one leading backslash
+masks the following quote), but fails for `\\"` (two consecutive backslashes):
+the second `\` at bit position N shifts to N+1, masking the genuine closing `"`
+at that position.  The parser then scanned past the real end-of-string and hit
+EOF mid-string, returning a parse error.
+
+**Design decisions** — The fix adds a one-byte `LOC_BS_PARITY` slot at
+`[rbp - 48]` (unused padding in both stack frames).  The interesting mask
+becomes `backslashes | quotes` (all `\` and `"` bytes are considered
+interesting).  The hot loop tracks consecutive-backslash parity:
+
+- After `tzcnt` finds the first interesting byte: if the skip count > 0
+  (checked with `test rax, rax` / `jz` — **not** the tzcnt flags, which
+  reflect the *source* being zero rather than the *result* being zero),
+  reset parity to 0 because a literal run broke the backslash chain.
+- At each `\`: toggle parity via `xor byte ptr [rbp + LOC_BS_PARITY], 1`.
+- At each `"`: if parity is 1 the quote is escaped; jump to a new
+  `.Lsc_escaped_quote` / `.Lkc_escaped_quote` handler (mark escaped, reset
+  parity, advance past the `"`, continue).  If parity is 0 the quote closes
+  the string.
+
+A key subtlety: after `tzcnt rax, rax`, the x86 flags do **not** distinguish
+"result = 0" from "result > 0".  Specifically, ZF is set when the *source*
+operand was zero, not when the *result* is zero.  A `jz` immediately after
+`tzcnt` would fire on "no interesting bytes at all" (result = 64), not on
+"first byte is interesting" (result = 0).  Adding `test rax, rax` before the
+branch correctly checks the skip count value.
+
+**Second bug uncovered** — Once the parity fix allowed `parse_with_zmm` to
+correctly close a top-level escaped string such as `"#\\"`, a latent second
+bug became reachable: when a SAX string value ends exactly at a 64-byte chunk
+boundary, the r11 (EOF handler) was `.Lerror_from_r11` rather than
+`.Leof_after_value`, causing `parse_json_zmm_sax` to return failure on valid
+input.  This had never been triggered before because all existing tests embed
+the string inside a larger JSON object.  Fixed by using
+`lea r11, [rip + .Leof_after_value]` in both the unescaped-string-close and
+`Lsc_emit_escaped` paths.
+
+**Results** — All 31 unit tests and 9 doc-tests pass.  Both
+`swar_eq_byte_quote_false_positive_regression` (DOM SWAR + DOM zmm) and
+`swar_eq_byte_quote_false_positive_regression_sax` (SAX SWAR + SAX zmm) are
+now green.
+
+**Commit** — 7d3c7a1 Fix assembly backslash-parity bug; add zmm coverage to regression tests
